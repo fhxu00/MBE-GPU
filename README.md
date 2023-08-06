@@ -54,6 +54,7 @@ cd MBE-GPU
 # otherwise you should revise the file CMakeLists.txt under the directory src/ to support your GPU.  
 bash ./scripts/compile-GMBE.sh [GPU_TYPE]
 ```
+You can refer to the [QA-1](# QA) about how to support your GPUs.
 
 ## Dataset preparing
 For convenience, we provide a script to download and preprocess datasets. You can run the following command and you will find 
