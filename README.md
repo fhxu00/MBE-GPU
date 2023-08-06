@@ -28,6 +28,8 @@ A machine with GPUs.
 - Python 2.7.18
 - Python packages: zplot 1.41, pathlib 1.0.1
 - C++ library: libtbb-dev 2020.1-2
+- Ghostscript 9.26
+- Texlive-extra-utils 2017.20180305-2
 ## Compiling
 Using the following commands, one can easily compile the GMBE. The generated executable file is located at `bin/MBE_GPU`.
 ```
