@@ -28,13 +28,26 @@ A machine with GPUs.
 - Python 2.7.18
 - Python packages: zplot 1.41, pathlib 1.0.1
 - C++ library: libtbb-dev 2020.1-2
-- Ghostscript 9.26
-- Texlive-extra-utils 2017.20180305-2
+- Ubuntu apt package: Ghostscript, Texlive-extra-utils
+- Nvidia driver 510.85.02
+- Docker 20.10.10
+## Deploy with docker image
+We provide a docker image for the convenience to deploy this project. You should install some packages and download the docker image with the following commands 
+before you run the docker image.
+```
+sudo apt install nvidia-docker2
+docker pull fhxu00/gmbe
+```
+To run the docker image, you should execute the following command. Assure that the host machine has installed the nvidia driver with the version mentioned above.
+```
+docker run -it --gpus all --name gmbe-test fhxu00/gmbe bash
+```
+Then you can deploy this project in the docker as followings.
 ## Compiling
 Using the following commands, one can easily compile the GMBE. The generated executable file is located at `bin/MBE_GPU`.
 ```
 # Get source code
-git clone --recursive
+git clone --recursive [repository_url]
 cd MBE-GPU
 
 # compiling with specific GPU type. If your GPU is A100, V100 and 2080TI, you can replace [GPU_TYPE] with the specific GPU type,
@@ -107,3 +120,8 @@ To generate the experimental result of Table 2, you can execute the script as fo
 bash ./scripts/gen-table-2.sh [GPU_TYPE]
 ```
 Then you will find the experimental result under the directory `table/`.
+# QA
+1. How to solve the error `GPUassert: named symbol not found /usr/local/MBE-GPU/src/IterFinderGpu.cu 215`?
+This usually means that the flag CUDA_NVCC_FLAGS in `src/CMakeLists.txt` mismatch with your GPUs. To solve the problem, you should revise the file CMakeLists.txt to support your GPU.
+First, you should lookup the CUDA_NVCC_FLAGS matching with your GPU from `[this link](https://arnon.dk/matching-sm-architectures-arch-and-gencode-for-various-nvidia-cards/)`. Second, add a `if` branch
+to set CUDA_NVCC_FLAGS for your GPU in `CMakeLists.txt`.
