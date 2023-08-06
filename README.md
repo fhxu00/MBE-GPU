@@ -121,7 +121,7 @@ bash ./scripts/gen-table-2.sh [GPU_TYPE]
 ```
 Then you will find the experimental result under the directory `table/`.
 # QA
-1. How to solve the error `GPUassert: named symbol not found /usr/local/MBE-GPU/src/IterFinderGpu.cu 215`?
+1. How to solve the error `GPUassert: named symbol not found /usr/local/MBE-GPU/src/IterFinderGpu.cu 215`?<br/>
 This usually means that the flag CUDA_NVCC_FLAGS in `src/CMakeLists.txt` mismatch with your GPUs. To solve the problem, you should revise the file CMakeLists.txt to support your GPU.
 First, you should lookup the CUDA_NVCC_FLAGS matching with your GPU from [this link](https://arnon.dk/matching-sm-architectures-arch-and-gencode-for-various-nvidia-cards/). Second, add a `if` branch
 to set CUDA_NVCC_FLAGS for your GPU in `CMakeLists.txt`.
