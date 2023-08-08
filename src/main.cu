@@ -92,7 +92,7 @@ int main(int argc, char* argv[]) {
   int bound_size = 1500;
   char graph_name[80] = "db/Writers.adj";
 
-  while ((op = getopt(argc, argv, "h:x:i:s:t:o:fp")) != -1) {
+  while ((op = getopt(argc, argv, "h:x:i:s:m:n:t:o:fp")) != -1) {
     switch (op) {
       case 'i':
         memcpy(graph_name, optarg, strlen(optarg) + 1);
