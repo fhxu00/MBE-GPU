@@ -42,7 +42,8 @@ To run the docker image, you should execute the following command. Assure that t
 ```
 docker run -it --gpus all --name gmbe-test fhxu00/gmbe bash
 ```
-Then you can deploy this project in the docker as followings.
+We have prepared the source code in the directory `~/MBE-GPU` and downloaded all testing datasets in the docker image. You can now compile the source code and run the testing scripts in the docker as follows.
+
 ## Compiling
 Using the following commands, one can easily compile the GMBE. The generated executable file is located at `bin/MBE_GPU`.
 ```
