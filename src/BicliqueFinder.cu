@@ -9,9 +9,12 @@ BicliqueFinder::BicliqueFinder(CSRBiGraph* graph_in)
 void BicliqueFinder::PrintResult(char* fn) {
   FILE* fp = (fn == nullptr || strlen(fn) == 0) ? stdout : fopen(fn, "a+");
   if (fn != nullptr) fseek(fp, 0, SEEK_END);
-  fprintf(fp, "Total processing time: %lf seconds\n", exe_time_);
-  fprintf(fp, "maximal nodes:%d\n", maximal_nodes_);
-  fprintf(fp, "\n");
+  //printf("Max blocks:%u Warps per block:%u Max1d:0x%x Max2d:0x%x\n", MAX_BLOCKS,
+  //       WARP_PER_BLOCK, MAX_DEGREE_BOUND, MAX_2_H_DEGREE_BOUND);
+  //fprintf(fp, "Total processing time: %lf seconds\n", exe_time_);
+  //fprintf(fp, "maximal nodes:%lld\n", maximal_nodes_);
+  //fprintf(fp, "\n");
+  printf(", %lld, %lf\n", maximal_nodes_, exe_time_);
   if (fn != NULL) fclose(fp);
 }
 

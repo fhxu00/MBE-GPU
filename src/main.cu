@@ -7,6 +7,7 @@
 #include <cub/block/block_store.cuh>
 #include <cub/config.cuh>
 #include <set>
+#include <sys/time.h>
 
 #include "BiGraph.h"
 #include "BicliqueFinder.h"
@@ -14,6 +15,8 @@
 #include "Utility.h"
 #include "unistd.h"
 #include "signal.h"
+
+BicliqueFinder *finder_global = nullptr;
 
 void FinderTest(BicliqueFinder* finder = nullptr, char* fn = nullptr) {
   if (finder == nullptr) return;
@@ -70,12 +73,23 @@ void PrintGpuProp() {
 
 void sigProcessFor19(int sigNum) {
   printf("Total processing time is more than 7200s\n");
+  finder_global -> PrintResult(nullptr);
   exit(0);
+}
+
+void timerProcess(int signo) {
+  static int count = 0;
+  printf("tick counts: %d\n", count++);
+  dynamic_cast<IterFinderGpu*>(finder_global)->SyncMB();
+  finder_global->PrintResult(nullptr);
 }
 
 int main(int argc, char* argv[]) {
 
   signal(SIGTERM, sigProcessFor19);
+  signal(SIGALRM, timerProcess);
+
+
 
   struct cudaDeviceProp dev_prop;
   cudaGetDeviceProperties(&dev_prop, 0);
@@ -91,8 +105,9 @@ int main(int argc, char* argv[]) {
   int bound_height = 20;
   int bound_size = 1500;
   char graph_name[80] = "db/Writers.adj";
+  int limit = 0;
 
-  while ((op = getopt(argc, argv, "h:x:i:s:m:n:t:o:fp")) != -1) {
+  while ((op = getopt(argc, argv, "l:h:x:i:s:m:n:t:o:fp")) != -1) {
     switch (op) {
       case 'i':
         memcpy(graph_name, optarg, strlen(optarg) + 1);
@@ -121,29 +136,51 @@ int main(int argc, char* argv[]) {
       case 'p':
         printSMTime = true;
         break;
+      case 'l':
+        limit = atoi(optarg);
+        break;
     }
+  }
+  if (limit != 0) {
+    itimerval tick;
+    tick.it_value.tv_sec = limit;
+    tick.it_value.tv_usec = 0;
+    tick.it_interval.tv_sec = limit;
+    tick.it_interval.tv_usec = 0;
+    setitimer(ITIMER_REAL, &tick, NULL);
   }
   double start_t = get_cur_time();
   CSRBiGraph* graph = new CSRBiGraph();
   graph->Read(graph_name, opt);
-  printf("Max blocks:%u Warps per block:%u Max1d:0x%x Max2d:0x%x\n", MAX_BLOCKS,
-         WARP_PER_BLOCK, MAX_DEGREE_BOUND, MAX_2_H_DEGREE_BOUND);
-  printf("trans:%d sel:%d order:%d fast_mode:%d\n", opt.uvtrans, sel, opt.order,
-         opt.fast_mode);
+  //printf("Max blocks:%u Warps per block:%u Max1d:0x%x Max2d:0x%x\n", MAX_BLOCKS,
+  //       WARP_PER_BLOCK, MAX_DEGREE_BOUND, MAX_2_H_DEGREE_BOUND);
+  //printf("trans:%d sel:%d order:%d fast_mode:%d\n", opt.uvtrans, sel, opt.order,
+  //       opt.fast_mode);
 
-  printf("Graph load time: %lf s\n", get_cur_time() - start_t);
+  printf("%d, %s, %u, %u, %d, %d", sel, graph_name, MAX_BLOCKS,WARP_PER_BLOCK, bound_height, bound_size);
+  #ifdef NN
+  printf(", %u", NN);
+  #endif
+  //printf("trans:%d sel:%d order:%d fast_mode:%d\n", opt.uvtrans, sel, opt.order,
+  //       opt.fast_mode);
+
+  //printf("Graph load time: %lf s\n", get_cur_time() - start_t);
   switch (sel) {
     case 0:
-      FinderTest(new IterFinderGpu(graph));
+      finder_global = new IterFinderGpu(graph);
       break;
     case 1:
-      FinderTest(new IterFinderGpu2(graph));
+      finder_global = new IterFinderGpu2(graph);
       break;
     case 2:
-      FinderTest(new IterFinderGpu6(graph, bound_height, bound_size));
+      finder_global = new IterFinderGpu6(graph, bound_height, bound_size);
       break;
     case 3:
-      FinderTest(new IterFinderGpu7(graph, ngpus));
+      finder_global = new IterFinderGpu7(graph, ngpus);
+      break;
+    case 4: 
+      finder_global = new IterFinderGpu8(graph, ngpus, 0);
       break;
   }
+  FinderTest(finder_global);
 }

@@ -9,6 +9,10 @@
 
 #define BITSET_BOUND 32
 
+//#ifndef NN
+//#define NN 64
+//#endif
+
 class Biclique {
  public:
   int Size() { return L.size() * R.size(); }
@@ -25,7 +29,7 @@ class BicliqueFinder {
  protected:
   CSRBiGraph* graph_;
   Biclique maximum_biclique_;
-  int maximal_nodes_;
+  unsigned long long maximal_nodes_;
   double exe_time_, start_time_;
 };
 

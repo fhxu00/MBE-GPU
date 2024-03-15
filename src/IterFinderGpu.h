@@ -5,15 +5,121 @@
 #include "WorkList.cuh"
 #include "BicliqueFinder.h"
 #include "GpuUtil.cuh"
+#include <cstring>
+
 #ifndef MAX_DEGREE_BOUND
-#define MAX_DEGREE_BOUND 0x4000
+#define MAX_DEGREE_BOUND 0x800000
 #endif
 
 #ifndef MAX_2_H_DEGREE_BOUND
-#define MAX_2_H_DEGREE_BOUND 0x24000
+#define MAX_2_H_DEGREE_BOUND 0x30000
 #endif
 
 #define UNION_THRESHOLD 10000
+
+#ifdef NN
+class bitset_t {
+  typedef uint32_t unit_type;
+  #define unit_size 32 
+  #define bitset_size (NN + unit_size - 1) / unit_size
+private:
+  unit_type _bits[bitset_size];
+public:
+  __device__ bitset_t() {
+    memset(_bits, 0, bitset_size * sizeof(unit_type));
+  }
+
+  __device__ bitset_t(const bitset_t & b) {
+    memcpy(_bits, b._bits, bitset_size * sizeof(unit_type));
+  }
+
+  __device__ bitset_t& operator = (const bitset_t & b) {
+    memcpy(_bits, b._bits, bitset_size * sizeof(unit_type));
+  }
+
+  __device__ bitset_t operator & (const bitset_t &b) {
+    bitset_t temp = *this;
+    for (int i = 0; i < bitset_size; i++) {
+      temp._bits[i] &= b._bits[i];
+    }
+    return temp;
+  }
+
+  __device__ bool operator != (const bitset_t &b) {
+    return !operator ==(b);
+  } 
+
+  __device__ void operator &= (const bitset_t &b) {
+    for (int i = 0; i < bitset_size; i++) {
+      _bits[i] &= b._bits[i];
+    }
+  }
+
+  __device__ bool operator == (const bitset_t & b) const {
+    for (int i = 0; i < bitset_size; i++) {
+      if (_bits[i] != b._bits[i]) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  __device__ void clear() {
+    memset(_bits, 0, bitset_size * sizeof(unit_type));
+  }
+
+  __device__ int count() {
+    int ans = 0;
+    for (int i = 0; i < bitset_size; i++) {
+      char t = _bits[i];
+      while (t != 0) {
+        ans ++;
+        t &= (t - 1);
+      }
+    }
+    return ans;
+  }
+
+  __device__ void print() {
+    for (int i = bitset_size - 1; i >= 0; i--) {
+      char t = _bits[i];
+      for (int j = 0; j < unit_size; j++) {
+        if (t & 1) {
+          printf("1");
+        } else {
+          printf("0");
+        }
+        t = t >> 1;
+      }
+    }
+    printf("\n");
+  }
+
+  __device__ void setbits(int n) {
+    int i = 0;
+    while (n > 0) {
+      int offset = n > unit_size ? unit_size : n;
+      _bits[i] = -1;
+      _bits[i] = _bits[i] >> (unit_size - offset);
+      i++;
+      n -= unit_size;
+    }
+  }
+
+  __device__ void set(int pos) {
+    int i = 0;
+    while(true) {
+      if (pos < unit_size) {
+        _bits[i] |= 1 << pos;
+        break;
+      }
+      i++;
+      pos -= unit_size;
+    } 
+  } 
+
+};
+#endif
 
 class IterFinderGpu : public BicliqueFinder {
  public:
@@ -21,10 +127,12 @@ class IterFinderGpu : public BicliqueFinder {
   IterFinderGpu(CSRBiGraph *graph_in);
   ~IterFinderGpu();
   virtual void Execute();
+  void SyncMB();
 
  protected:
   CSRBiGraph *graph_gpu_;
-  int *dev_global_buffer_, *dev_mb_, *dev_processing_vertex_;
+  int  *dev_global_buffer_, *dev_processing_vertex_;
+  unsigned long long *dev_mb_;
   double clock_rate;
   unsigned long long* total_clock_initialize, *total_clock_queue, *total_clock_generate_tiny, *total_clock_iterate, *dev_total_clock;
 };
@@ -87,6 +195,8 @@ class IterFinderGpu6 : public IterFinderGpu {
   unsigned long long *tiny_count;
   int bound_height;
   int bound_size;
+  unsigned long long *mb_host;
+  unsigned long long *mb_system;
 };
 
 class IterFinderGpu7: public IterFinderGpu {
@@ -99,6 +209,16 @@ private:
   int ngpus, verticesEachGpu, vsize;
 };
 
+class IterFinderGpu8: public IterFinderGpu {
+public:
+  IterFinderGpu8() = delete;
+  IterFinderGpu8(CSRBiGraph *graph_in, int ngpus, int task_channel);
+  ~IterFinderGpu8();
+  void Execute();
+private:
+  int ngpus, verticesEach, vsize, task_channel_;
+
+};
 __device__ __forceinline__ int NeighborsIntersectL(CSRBiGraph &graph,
                                                    int *L_vertices, int L_size,
                                                    int *buf, int *dst) {
@@ -206,7 +326,7 @@ __device__ __forceinline__ void seq_intersect_warp_for_iter_finder(
 __device__ __forceinline__ bool finder_push(
     CSRBiGraph &graph, int push_cid, int level, int *L_vertices, int *L_level,
     const int L_size, int *C_vertices, int *C_level_neighbors, const int C_size,
-    bool init = false) {
+    int &size_cur_l, bool init = false) {
   bool is_maximal = true;
   int cur_c = C_vertices[push_cid];
   int *base_cur_c = graph.column_indices + graph.row_offset[cur_c];
@@ -225,7 +345,8 @@ __device__ __forceinline__ bool finder_push(
   }
   size_last_vs_cur = warp_sum(size_last_vs_cur);
   size_last_vs_cur = get_value_from_lane_x(size_last_vs_cur);
-  int size_cur_l = size_last_vs_cur & 0xffff;
+  size_cur_l = size_last_vs_cur & 0xffff;
+
 
   bool recompute = init || (size_last_vs_cur >> 16) > (size_cur_l << 1);
   int victim_level = recompute ? level : level - 1;
@@ -257,7 +378,7 @@ __device__ __forceinline__ bool finder_push(
         is_maximal = false;
       else if ((c_level_neighbors >> 16) > level)
         C_level_neighbors[i] = (level << 16) | (c_level_neighbors & 0xffff);
-    }
+    } 
   }
 
   return __all_sync(FULL_MASK, is_maximal);

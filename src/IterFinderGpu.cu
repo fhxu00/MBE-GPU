@@ -3,18 +3,203 @@
 #include "WorkList.cuh"
 #include <queue>
 #include <algorithm>
+#include <unistd.h>
+#include <vector>
 
 extern bool printSMTime;
 
 #define SHARED_CACHE_SIZE 0x1000
 #define BUFFER_PER_WARP (2 * MAX_DEGREE_BOUND + 2 * MAX_2_H_DEGREE_BOUND)
+#ifdef NN
+__device__ bool finder_push_bitset(bitset_t &L, bitset_t *Q_C, int *exe_stack, int &cur_cid, int &level) {
+  bitset_t L_prime = L & Q_C[cur_cid];
+  if (L_prime.count() == 0) return false;
+  bool is_maximal = true;
+  for (int i = get_lane_id(); i < cur_cid && is_maximal; i += warpSize) {
+    bitset_t bs = L_prime & Q_C[i];
+    if (bs == L_prime && (L & Q_C[i]) != L) {
+      is_maximal = false;
+    }
+  }
+  is_maximal = __all_sync(FULL_MASK, is_maximal);
+  if (is_maximal) {
+    if (get_lane_id() == 0) {
+      exe_stack[level - 1] = cur_cid;
+      exe_stack[level] = cur_cid + 1;
+    }
+    level++;
+    L = L_prime;
+  } else {
+    if (get_lane_id() == 0) {
+      exe_stack[level - 1] = cur_cid + 1;
+    }
+  }
+  __syncwarp();
+  return is_maximal;
+}
+
+__device__ void finder_pop_bitset(bitset_t &L, bitset_t* Q_C, int *exe_stack, int &level, bitset_t &L_stack, int level_start, int *C_level_neighbors, int C_size) {
+  int cur_cid = exe_stack[level - 1];
+  bitset_t cur_bs = L_stack;
+  L_stack = L;
+  level--;
+  for (int i = level_start; i < level - 1; i++) {
+    L_stack &= Q_C[exe_stack[i]];
+  }
+  #ifdef PRUNE_EN
+  int start_id = 0;
+  if (level > 0) {
+    start_id = exe_stack[level - 1];
+  }
+  for (int i = get_lane_id() + start_id; i < C_size && level > level_start; i += warpSize) {
+    int c_level_neighbors = C_level_neighbors[i];
+    bitset_t bs = L_stack & Q_C[i];
+    int c_level = c_level_neighbors >> 16;
+    if (c_level < level) continue;
+    int prefix = 0x7fff;
+    if (i > cur_cid && (bs & cur_bs) == bs) {
+      prefix = level - 1;
+    }
+    C_level_neighbors[i] = (c_level_neighbors & 0xffff) | (prefix << 16);
+  }
+  #endif
+  __syncwarp();
+  if (get_lane_id() == 0 && level > level_start) {
+    exe_stack[level - 1] = exe_stack[level - 1] + 1;
+  }
+}
+
+__device__ void IterProcess_bitset(bitset_t &L, bitset_t *Q_C, int &Q_C_size, int c_start, int &local_mb_counter, int *exe_stack, int *C_level_neighbors, int& level_start) {
+  int level = level_start + 1;
+  if (get_lane_id() == 0) exe_stack[level_start] = c_start;
+  bool is_maximal;
+  bitset_t L_stack = L;
+  while (level != level_start) {
+    __syncwarp();
+    int cur_cid = -1;
+    int last_cid = exe_stack[level - 1];
+    for (int i = last_cid; i < Q_C_size; i++) {
+      bitset_t bs = L_stack & Q_C[i];
+      int c_level_neighbors = C_level_neighbors[i];
+      if (bs != L_stack && bs.count() != 0 && (c_level_neighbors >> 16) > level - 1) {
+        cur_cid = i;
+        break;
+      }
+    }
+    if (cur_cid != -1) {
+      is_maximal = finder_push_bitset(L_stack, Q_C, exe_stack, cur_cid, level);
+      if (is_maximal) {
+        local_mb_counter++;  
+      } else {
+        #ifdef PRUNE_EN
+        bitset_t cur_bs = L_stack & Q_C[cur_cid];
+        for (int i = get_lane_id() + cur_cid + 1; i < Q_C_size; i += warpSize) {
+          int c_level_neighbors = C_level_neighbors[i];
+          bitset_t bs = L_stack & Q_C[i];
+          int c_level = c_level_neighbors >> 16;
+          if (c_level < level) continue;
+          if ((bs & cur_bs) == bs) {
+            C_level_neighbors[i] = (c_level_neighbors & 0xffff) | ((level - 1) << 16);
+          }
+        }
+        #endif
+      }
+    } else {
+      finder_pop_bitset(L, Q_C, exe_stack, level, L_stack, level_start, C_level_neighbors, Q_C_size);
+    }
+  }
+}
+
+__device__ void bitset_adapter(CSRBiGraph &graph, int cur_cid,
+                               int *L_vertices, int *L_level,
+                               int L_size, int *C_vertices,
+                               int *C_level_neighbors, int C_size, 
+                               int *exe_stack, int &local_mb_counter,
+                               bitset_t *bitsets_ptr, int level) {
+  int cur_l_size = 0;
+  int warpId = threadIdx.x / 32;
+  __shared__ int L_curs[NN * WARP_PER_SM];
+  int *L_cur = L_curs + NN * warpId; 
+  for (int i = get_lane_id(); i - get_lane_id() < L_size; i += warpSize) {
+    unsigned int mask = __ballot_sync(FULL_MASK, i < L_size);
+    int pos_inc = 0;
+    if (i < L_size) {
+      bool is_cur_l = L_level[i] == level; 
+      unsigned int cur_l_mask = __ballot_sync(mask, is_cur_l);
+      if (is_cur_l) {
+        int offset = count_bit(cur_l_mask >> get_lane_id()) - 1;
+        int pos = cur_l_size + offset;
+        L_cur[pos] = L_vertices[i];
+      }
+      pos_inc = count_bit(cur_l_mask);
+    }
+    pos_inc = get_value_from_lane_x(pos_inc);
+    cur_l_size += pos_inc;
+  }
+  __syncwarp();
+  bitset_t L;
+  L.setbits(cur_l_size);
+  int q_c_size = 0;
+  int c_start = C_size;
+  for (int i = get_lane_id(); i - get_lane_id() < C_size; i += warpSize) {
+    unsigned int mask = __ballot_sync(FULL_MASK, i < C_size);
+    int pos_inc = 0;
+    if (i < C_size) {
+      int l_connected = C_level_neighbors[i] & 0xffff;
+      bitsets_ptr[i].clear();
+        for (int j = 0; j < cur_l_size; j++) {
+          int u0 = L_cur[j];
+          int *base_0 = graph.rev_column_indices + graph.rev_row_offset[u0];
+          int size_0 = graph.rev_row_offset[u0 + 1] - graph.rev_row_offset[u0];
+          if (binary_search(C_vertices[i], base_0, 0, size_0 - 1) != -1) {
+            bitsets_ptr[i].set(j);
+          }
+        }
+
+      //bool is_q_c = l_connected > 0 && l_connected < cur_l_size; 
+      //unsigned int q_c_mask = __ballot_sync(mask, is_q_c);
+      //int n = count_bit(q_c_mask);
+
+      /*
+      if (is_q_c) {
+        int offset = n - count_bit(q_c_mask >> get_lane_id());
+        int pos = q_c_size + offset;
+        bitsets_ptr[pos].clear();
+        if (i > cur_cid && c_start == C_size) {
+          c_start = pos;
+        }
+        for (int j = 0; j < cur_l_size; j++) {
+          int u0 = L_cur[j];
+          int *base_0 = graph.rev_column_indices + graph.rev_row_offset[u0];
+          int size_0 = graph.rev_row_offset[u0 + 1] - graph.rev_row_offset[u0];
+          if (binary_search(C_vertices[i], base_0, 0, size_0 - 1) != -1) {
+            bitsets_ptr[pos].set(j);
+          }
+        }
+      }
+      pos_inc = count_bit(q_c_mask);
+      */
+    }
+    //pos_inc = get_value_from_lane_x(pos_inc);
+    //q_c_size += pos_inc;
+  }
+  /*c_start = warp_min(c_start);
+  if (c_start == C_size) {
+    return;
+  }*/
+  IterProcess_bitset(L, bitsets_ptr, C_size, cur_cid + 1, local_mb_counter, exe_stack, C_level_neighbors, level);
+}
+#endif
 
 __device__ __forceinline__ void IterProcess(CSRBiGraph &graph, int *L_vertices,
                                             int *L_level, int L_size,
                                             int *C_vertices,
                                             int *C_level_neighbors, int C_size,
                                             int *exe_stack, int first_id,
-                                            int &local_mb_counter,
+                                            int &local_mb_counter, 
+                                            #ifdef NN
+                                            bitset_t *bitsets_ptr,
+                                            #endif
                                             unsigned long long *non_maximal = nullptr) {
   int level = 1;
   if (get_lane_id() == 0) exe_stack[0] = first_id;
@@ -34,10 +219,19 @@ __device__ __forceinline__ void IterProcess(CSRBiGraph &graph, int *L_vertices,
     }
 
     if (cur_cid != -1) {  // next candidate id is found
+      int cur_l_size = 0;
       is_maximal = finder_push(graph, cur_cid, level, L_vertices, L_level,
-                               L_size, C_vertices, C_level_neighbors, C_size);
+                               L_size, C_vertices, C_level_neighbors, C_size, cur_l_size);
 
-      if (is_maximal) local_mb_counter++;
+      if (is_maximal) {
+        #ifdef NN
+        if (cur_l_size <= NN) {
+          bitset_adapter(graph, cur_cid, L_vertices, L_level, L_size, C_vertices, C_level_neighbors, C_size, exe_stack, local_mb_counter, bitsets_ptr, level);
+          is_maximal = false;
+        }
+        #endif
+        local_mb_counter++;
+      }
       else {
         if (get_lane_id() == 0 && non_maximal != nullptr) {
           atomicAdd(non_maximal, 1);
@@ -70,7 +264,7 @@ __device__ __forceinline__ void IterProcess(CSRBiGraph &graph, int *L_vertices,
 
 __launch_bounds__(32 * WARP_PER_SM, 1) __global__
     void IterFinderKernel(CSRBiGraph graph, int *global_buffer,
-                          int *maximal_bicliques, int *processing_vertex,
+                          unsigned long long *maximal_bicliques, int *processing_vertex,
                           double clock_rate = 0
                           ) {
   auto sm_start = clock64();
@@ -90,6 +284,10 @@ __launch_bounds__(32 * WARP_PER_SM, 1) __global__
   int *C_vertices = warp_buffer + 2 * MAX_DEGREE_BOUND;
   int *C_level_neighbors =
       warp_buffer + 2 * MAX_DEGREE_BOUND + MAX_2_H_DEGREE_BOUND;
+  #ifdef NN
+  bitset_t *bitsets_ptr = 
+    (bitset_t *)(C_level_neighbors + MAX_2_H_DEGREE_BOUND);
+  #endif
   int C_size;
 
   int cur_vertex;
@@ -160,7 +358,11 @@ __launch_bounds__(32 * WARP_PER_SM, 1) __global__
 
           IterProcess(graph, L_vertices, L_level, L_size, C_vertices,
                       C_level_neighbors, C_size, exe_stack, first_level_cand_id,
-                      local_mb_counter);
+                      local_mb_counter
+                      #ifdef NN
+                      , bitsets_ptr
+                      #endif
+                      );
         }
       }
     }
@@ -178,16 +380,25 @@ __launch_bounds__(32 * WARP_PER_SM, 1) __global__
   }
 }
 
+void IterFinderGpu::SyncMB() {
+  printf("start to sync\n");
+  cudaStream_t stream;
+  gpuErrchk(cudaMemcpyAsync(&maximal_nodes_, dev_mb_, sizeof(int),
+                       cudaMemcpyDeviceToHost, stream));
+  exe_time_ = get_cur_time() - start_time_;
+  printf("copy success, mb: %d\n", maximal_nodes_);
+}
+
 IterFinderGpu::IterFinderGpu(CSRBiGraph *graph_in) : BicliqueFinder(graph_in) {
   graph_gpu_ = new CSRBiGraph();
   gpuErrchk(cudaSetDevice(0));
   graph_gpu_->CopyToGpu(*graph_in);
-  gpuErrchk(cudaMalloc((void **)&dev_mb_, sizeof(int)));
+  gpuErrchk(cudaMalloc((void **)&dev_mb_, sizeof(unsigned long long)));
   gpuErrchk(cudaMalloc((void **)&dev_processing_vertex_, sizeof(int)));
   size_t g_size = (size_t)MAX_BLOCKS * WARP_PER_BLOCK * BUFFER_PER_WARP;
   gpuErrchk(cudaMalloc((void **)&dev_global_buffer_, g_size * sizeof(int)));
   maximal_nodes_ = 0;
-  gpuErrchk(cudaMemset(dev_mb_, 0, sizeof(int)));
+  gpuErrchk(cudaMemset(dev_mb_, 0, sizeof(unsigned long long)));
   gpuErrchk(cudaMemset(dev_processing_vertex_, 0, sizeof(int)));
   gpuErrchk(cudaMemset(dev_global_buffer_, 0, g_size * sizeof(int)));
 
@@ -220,14 +431,14 @@ void IterFinderGpu::Execute() {
 }
 
 #define SD_BUFFER_PER_BLOCK (MAX_2_H_DEGREE_BOUND)  // for common C vertices
-#define BUFFER_PER_WARP_2 (3 * MAX_DEGREE_BOUND + 2 * MAX_2_H_DEGREE_BOUND)
+#define BUFFER_PER_WARP_2 (3 * MAX_DEGREE_BOUND + 3 * MAX_2_H_DEGREE_BOUND)
 #define BUFFER_PER_BLOCK_2 \
   (SD_BUFFER_PER_BLOCK + BUFFER_PER_WARP_2 * WARP_PER_BLOCK)
 // L_vertices, L_level, exe_stack, C, C_level_neighbors
 
 __launch_bounds__(32 * WARP_PER_SM, 1) __global__
     void IterFinderKernel_2(CSRBiGraph graph, int *global_buffer,
-                            int *maximal_bicliques, int *processing_vertex,
+                            unsigned long long *maximal_bicliques, int *processing_vertex,
                             double clock_rate = 0
                             ) {
   auto sm_start = clock64();
@@ -250,6 +461,10 @@ __launch_bounds__(32 * WARP_PER_SM, 1) __global__
   int *C_vertices = warp_buffer + 3 * MAX_DEGREE_BOUND;
   int *C_level_neighbors =
       warp_buffer + 3 * MAX_DEGREE_BOUND + MAX_2_H_DEGREE_BOUND;
+  #ifdef NN
+  bitset_t *bitsets_ptr = 
+    (bitset_t *)(C_level_neighbors + MAX_2_H_DEGREE_BOUND);
+  #endif
   int C_size;
   __shared__ int first_vertex;
   int second_id;
@@ -373,7 +588,11 @@ __launch_bounds__(32 * WARP_PER_SM, 1) __global__
       auto iterate_start = clock64();
       IterProcess(graph, L_vertices, L_level, L_size, C_vertices,
                   C_level_neighbors, C_size, exe_stack, next_id,
-                  local_mb_counter);
+                  local_mb_counter
+                  #ifdef NN
+                  , bitsets_ptr
+                  #endif
+                  );
     }
     __syncthreads();
   }
@@ -392,12 +611,12 @@ IterFinderGpu2::IterFinderGpu2(CSRBiGraph *graph_in) : IterFinderGpu(graph_in) {
   graph_gpu_ = new CSRBiGraph();
   gpuErrchk(cudaSetDevice(0));
   graph_gpu_->CopyToGpu(*graph_in);
-  gpuErrchk(cudaMalloc((void **)&dev_mb_, sizeof(int)));
+  gpuErrchk(cudaMalloc((void **)&dev_mb_, sizeof(unsigned long long)));
   gpuErrchk(cudaMalloc((void **)&dev_processing_vertex_, sizeof(int)));
   size_t g_size = (size_t)MAX_BLOCKS * BUFFER_PER_BLOCK_2;
   gpuErrchk(cudaMalloc((void **)&dev_global_buffer_, g_size * sizeof(int)));
   maximal_nodes_ = 0;
-  gpuErrchk(cudaMemset(dev_mb_, 0, sizeof(int)));
+  gpuErrchk(cudaMemset(dev_mb_, 0, sizeof(unsigned long long)));
   gpuErrchk(cudaMemset(dev_processing_vertex_, 0, sizeof(int)));
   gpuErrchk(cudaMemset(dev_global_buffer_, 0, g_size * sizeof(int)));
 }
@@ -418,7 +637,7 @@ void IterFinderGpu2::Execute() {
     clock_rate);
   gpuErrchk(cudaGetLastError());
   gpuErrchk(cudaDeviceSynchronize());
-  gpuErrchk(cudaMemcpy(&maximal_nodes_, dev_mb_, sizeof(int),
+  gpuErrchk(cudaMemcpy(&maximal_nodes_, dev_mb_, sizeof(unsigned long long),
                        cudaMemcpyDeviceToHost));
   cudaMemcpy(&clock_initialize, total_clock_initialize, sizeof(unsigned long long), cudaMemcpyDeviceToHost);
   cudaMemcpy(&clock_iterate, total_clock_iterate, sizeof(unsigned long long), cudaMemcpyDeviceToHost);
@@ -431,7 +650,7 @@ void IterFinderGpu2::Execute() {
 
 __launch_bounds__(32 * WARP_PER_SM, 1) __global__
     void ChildKernel(CSRBiGraph graph, int *global_buffer,
-                     int *maximal_bicliques, int block_id, int first_vertex,
+                     unsigned long long *maximal_bicliques, int block_id, int first_vertex,
                      int next_id, int C_size_sd) {
   __shared__ int C_scanner_id_sd;
   int warp_id = threadIdx.x / warpSize;
@@ -449,6 +668,10 @@ __launch_bounds__(32 * WARP_PER_SM, 1) __global__
   int *C_vertices = warp_buffer + 3 * MAX_DEGREE_BOUND;
   int *C_level_neighbors =
       warp_buffer + 3 * MAX_DEGREE_BOUND + MAX_2_H_DEGREE_BOUND;
+  #ifdef NN
+  bitset_t *bitsets_ptr = 
+    (bitset_t *)(C_level_neighbors + MAX_2_H_DEGREE_BOUND);
+  #endif
   int C_size;
 
   int second_id, second_vertex;
@@ -518,7 +741,11 @@ __launch_bounds__(32 * WARP_PER_SM, 1) __global__
 
     IterProcess(graph, L_vertices, L_level, L_size, C_vertices,
                 C_level_neighbors, C_size, exe_stack, next_id,
-                local_mb_counter);
+                local_mb_counter
+                #ifdef NN
+                , bitsets_ptr
+                #endif
+                );
   }
   if (get_lane_id() == 0 && local_mb_counter != 0) {
     atomicAdd(maximal_bicliques, local_mb_counter);
@@ -527,7 +754,7 @@ __launch_bounds__(32 * WARP_PER_SM, 1) __global__
 
 __launch_bounds__(32, 1) __global__
     void IterFinderKernel_3(CSRBiGraph graph, int *global_buffer,
-                            int *maximal_bicliques, int *processing_vertex) {
+                            unsigned long long *maximal_bicliques, int *processing_vertex) {
   int *C_vertices_sd = global_buffer + BUFFER_PER_BLOCK_2 * blockIdx.x;
   int *warp_buffer = C_vertices_sd + SD_BUFFER_PER_BLOCK;
 
@@ -538,6 +765,10 @@ __launch_bounds__(32, 1) __global__
   int *C_vertices = warp_buffer + 3 * MAX_DEGREE_BOUND;
   int *C_level_neighbors =
       warp_buffer + 3 * MAX_DEGREE_BOUND + MAX_2_H_DEGREE_BOUND;
+  #ifdef NN
+  bitset_t *bitsets_ptr = 
+    (bitset_t *)(C_level_neighbors + MAX_2_H_DEGREE_BOUND);
+  #endif
   int C_size;
 
   int first_vertex, local_mb_counter = 0;
@@ -617,7 +848,11 @@ __launch_bounds__(32, 1) __global__
 
             IterProcess(graph, L_vertices, L_level, L_size, C_vertices,
                         C_level_neighbors, C_size, exe_stack, next_id,
-                        local_mb_counter);
+                        local_mb_counter
+                        #ifdef NN
+                        , bitsets_ptr
+                        #endif
+                        );
           } else {
             if (get_lane_id() == 0) {
               ChildKernel<<<1, warps * warpSize>>>(
@@ -648,12 +883,12 @@ IterFinderGpu3::IterFinderGpu3(CSRBiGraph *graph_in) : IterFinderGpu(graph_in) {
   graph_gpu_ = new CSRBiGraph();
   gpuErrchk(cudaSetDevice(0));
   graph_gpu_->CopyToGpu(*graph_in);
-  gpuErrchk(cudaMalloc((void **)&dev_mb_, sizeof(int)));
+  gpuErrchk(cudaMalloc((void **)&dev_mb_, sizeof(unsigned long long)));
   gpuErrchk(cudaMalloc((void **)&dev_processing_vertex_, sizeof(int)));
   size_t g_size = (size_t)MAX_BLOCKS * BUFFER_PER_BLOCK_2;
   gpuErrchk(cudaMalloc((void **)&dev_global_buffer_, g_size * sizeof(int)));
   maximal_nodes_ = 0;
-  gpuErrchk(cudaMemset(dev_mb_, 0, sizeof(int)));
+  gpuErrchk(cudaMemset(dev_mb_, 0, sizeof(unsigned long long)));
   gpuErrchk(cudaMemset(dev_processing_vertex_, 0, sizeof(int)));
   gpuErrchk(cudaMemset(dev_global_buffer_, 0, g_size * sizeof(int)));
 }
@@ -672,7 +907,7 @@ void IterFinderGpu3::Execute() {
                                          dev_mb_, dev_processing_vertex_);
   gpuErrchk(cudaGetLastError());
   gpuErrchk(cudaDeviceSynchronize());
-  gpuErrchk(cudaMemcpy(&maximal_nodes_, dev_mb_, sizeof(int),
+  gpuErrchk(cudaMemcpy(&maximal_nodes_, dev_mb_, sizeof(unsigned long long),
                        cudaMemcpyDeviceToHost));
   exe_time_ = get_cur_time() - start_time_;
 }
@@ -781,7 +1016,10 @@ __device__ bool IterFinderWithMultipleVertex(CSRBiGraph graph, int *warp_buffer,
   int *C_vertices = warp_buffer + 3 * MAX_DEGREE_BOUND;
   int *C_level_neighbors =
       warp_buffer + 3 * MAX_DEGREE_BOUND + MAX_2_H_DEGREE_BOUND;
-  
+  #ifdef NN
+  bitset_t *bitsets = 
+      (bitset_t *)(warp_buffer + 3 * MAX_DEGREE_BOUND + 2 * MAX_2_H_DEGREE_BOUND);
+  #endif
   bool has_vertex = get_lane_id() < 4 && tt.vertices[get_lane_id()] != -1;
   int vertices_size = count_bit(__ballot_sync(0xffffffff, has_vertex));
 
@@ -881,7 +1119,11 @@ __device__ bool IterFinderWithMultipleVertex(CSRBiGraph graph, int *warp_buffer,
     for (int i = get_lane_id(); i < L_size; i += warpSize) L_level[i] = 0;
     IterProcess(graph, L_vertices, L_level, L_size, C_vertices,
                     C_level_neighbors, C_size, exe_stack, next_id,
-                    local_mb_counter, non_maximal);
+                    local_mb_counter
+                #ifdef NN
+                , bitsets
+                #endif
+                , non_maximal);
   }
   return false;
 }
@@ -909,6 +1151,7 @@ __device__ int LargeToTiny(CSRBiGraph graph, int *warp_buffer, LargeTask task, T
   return C_size - next_id;
 }
 
+
 #define DIVIDER_PER_BLOCK 1 
 #define LARGE_WORKLIST_SIZE 0x48000
 
@@ -917,7 +1160,8 @@ __device__ int LargeToTiny(CSRBiGraph graph, int *warp_buffer, LargeTask task, T
 #define CONSUMER_PER_BLOCK (WARP_PER_BLOCK - DIVIDER_PER_BLOCK)
 __launch_bounds__(32 * WARP_PER_SM, 1) __global__
     void IterFinderKernel_6(CSRBiGraph graph, int *global_buffer, 
-                            int *maximal_bicliques, int *processing_vertex,  
+                            unsigned long long *maximal_bicliques,
+                            unsigned long long *mb_system, int *processing_vertex,  
                             WorkList<LargeTask> *global_large_worklist, 
                             unsigned long long *global_count, 
                             unsigned long long *large_count, unsigned long long *tiny_count,
@@ -953,6 +1197,14 @@ __launch_bounds__(32 * WARP_PER_SM, 1) __global__
   
   if (threadIdx.x / warpSize < 1) {
     while (true) {
+      /*bool exit = false;
+      if (get_lane_id() == 0 && (clock64() - sm_start) / 1000.0 / clock_rate > 10) {
+        exit = true;
+      }
+      get_value_from_lane_x(exit);
+      if (exit) {
+        break;
+      }*/
       __syncwarp();
       if (global_large_worklist->get_work_num() > 0) {
         LargeTask lt;
@@ -965,6 +1217,14 @@ __launch_bounds__(32 * WARP_PER_SM, 1) __global__
         }
         int pushed = 0;
         while (pushed < twn_p) {
+          /*bool exit = false;
+          if (get_lane_id() == 0 && (clock64() - sm_start) / 1000.0 / clock_rate > 10) {
+            exit = true;
+          }
+          get_value_from_lane_x(exit);
+          if (exit) {
+            break;
+          }*/
           __syncwarp();
           if (local_tiny_worklist.get_work_num() < LOCAL_TINY_WORKLIST_THRESHOLD) {
             size_t pushing = local_tiny_worklist.push_works(tiny_buffer + pushed, 
@@ -990,6 +1250,20 @@ __launch_bounds__(32 * WARP_PER_SM, 1) __global__
   {
     int lgc = 0;
     while (true) {
+      /*bool exit = false;
+      if (get_lane_id() == 0 && (clock64() - sm_start) / 1000.0 / clock_rate > 10) {
+        exit = true;
+      }
+      get_value_from_lane_x(exit);
+      if (exit) {
+        break;
+      }*/
+      #ifdef PRINT_TIMELY
+      if (get_lane_id() == 0 && local_mb_counter > 0) {
+        atomicAdd_system(mb_system, local_mb_counter);
+        local_mb_counter = 0;
+      }
+      #endif
       __syncwarp();
       if (!local_tiny_worklist.is_empty()) {
         TinyTask tt;
@@ -1039,17 +1313,18 @@ __launch_bounds__(32 * WARP_PER_SM, 1) __global__
   if (threadIdx.x == 0 && clock_rate != 0) {
     printf("SM exit: %lf\n", (sm_end - sm_start) / 1000.0 / clock_rate);
   }
-  if (get_lane_id() == 0 && local_mb_counter != 0)  
-  {
-    /*printf("initialize clock: %lld\n", clock_initialize);
-    printf("tiny generate clock: %lld\n", clock_tiny_generate);
-    printf("iterate clock: %lld\n", clock_iterate);
-    printf("queue clock: %lld\n", clock_queue);
-    printf("other clock: %lld\n", clock_end - clock_start - clock_queue - clock_iterate - clock_tiny_generate - clock_initialize);*/
-
+  if (get_lane_id() == 0 && local_mb_counter != 0) {
+    #ifdef PRINT_TIMELY
+    atomicAdd_system(mb_system, local_mb_counter);
+    #else
     atomicAdd(maximal_bicliques, local_mb_counter);
+    #endif
+    local_mb_counter = 0;
   }
 
+  //if (threadIdx.x == 0 && blockIdx.x == 0 && *maximal_bicliques > 0) {
+  //  atomicAdd_system(mb_system, *maximal_bicliques);
+  //}
 }
 
 
@@ -1058,7 +1333,10 @@ IterFinderGpu6::IterFinderGpu6(CSRBiGraph *graph_in, int bound_height_ , int bou
   graph_gpu_ = new CSRBiGraph();
   gpuErrchk(cudaSetDevice(0));
   graph_gpu_->CopyToGpu(*graph_in);
-  gpuErrchk(cudaMalloc((void **)&dev_mb_, sizeof(int)));
+  gpuErrchk(cudaMallocHost(&mb_host, sizeof(unsigned long long)));
+  *mb_host = 0;
+  gpuErrchk(cudaHostGetDevicePointer(&mb_system, mb_host, 0));
+  gpuErrchk(cudaMalloc((void **)&dev_mb_, sizeof(unsigned long long)));
   gpuErrchk(cudaMalloc((void **)&dev_processing_vertex_, sizeof(int)));
   LargeTask *large_worklist_ptr;
   gpuErrchk(cudaMalloc((void **)&large_worklist_ptr, sizeof(LargeTask) * LARGE_WORKLIST_SIZE));
@@ -1079,9 +1357,10 @@ IterFinderGpu6::IterFinderGpu6(CSRBiGraph *graph_in, int bound_height_ , int bou
   gpuErrchk(cudaMemset(global_count, 0, sizeof(unsigned long long)));
   gpuErrchk(cudaMemset(large_count, 0, sizeof(unsigned long long)));
   gpuErrchk(cudaMemset(tiny_count, 0, sizeof(unsigned long long)));
-  gpuErrchk(cudaMemset(dev_mb_, 0, sizeof(int)));
+  gpuErrchk(cudaMemset(dev_mb_, 0, sizeof(unsigned long long)));
   gpuErrchk(cudaMemset(dev_processing_vertex_, 0, sizeof(int)));
   gpuErrchk(cudaMemset(dev_global_buffer_, 0, g_size * sizeof(int)));
+
 }
 
 IterFinderGpu6::~IterFinderGpu6() {
@@ -1093,33 +1372,58 @@ IterFinderGpu6::~IterFinderGpu6() {
 }
 
 void IterFinderGpu6::Execute() {
+  cudaStream_t stream_default;
+  cudaStreamCreate(&stream_default);
+  cudaStream_t stream;
+  cudaStreamCreate(&stream);
   start_time_ = get_cur_time();
   unsigned long long *non_maximal;
   cudaMalloc(&non_maximal, sizeof(unsigned long long));
   cudaMemset(non_maximal, 0, sizeof(unsigned long long));
-  int *dev_test;
-  cudaMalloc((void**)&dev_test, sizeof(int));
-  cudaMemset(dev_test, 0, sizeof(int));
-  printf("large worklist size: %d local tiny size: %d\n", LARGE_WORKLIST_SIZE, LOCAL_TINY_WORKLIST_SIZE);
-  IterFinderKernel_6<<<MAX_BLOCKS, WARP_PER_BLOCK * 32>>>(
-    *graph_gpu_, dev_global_buffer_, dev_mb_, dev_processing_vertex_,
+  //printf("large worklist size: %d local tiny size: %d\n", LARGE_WORKLIST_SIZE, LOCAL_TINY_WORKLIST_SIZE);
+  IterFinderKernel_6<<<MAX_BLOCKS, WARP_PER_BLOCK * 32, 0, stream_default>>>(
+    *graph_gpu_, dev_global_buffer_, dev_mb_, mb_system, dev_processing_vertex_,
        global_large_worklist, global_count, large_count, tiny_count,
      non_maximal, bound_height, bound_size, clock_rate);
   int host_test;
   unsigned long long host_non_maximal;
-  cudaMemcpy(&host_test, dev_test, sizeof(int), cudaMemcpyDeviceToHost);
-  cudaMemcpy(&host_non_maximal, non_maximal, sizeof(unsigned long long), cudaMemcpyDeviceToHost);
+  int time_count = 0, sleep_time = 1000000;
+  cudaEvent_t stop;
+  cudaEventCreate(&stop);
+  cudaEventRecord(stop);
+  #ifdef PRINT_TIMELY
+  /*while (cudaEventQuery(stop) != cudaSuccess) {
+    usleep(sleep_time);
+    time_count++;
+    printf("%d\n", time_count);
+      //int *dev_mb_copy;
+      //cudaMalloc(&dev_mb_copy, sizeof(int));
+      //gpuErrchk(cudaMemcpyAsync(mb_host, dev_mb_, sizeof(int),
+      //                 cudaMemcpyDeviceToHost, stream));
+      //printf("host_mb: %d\n", *mb_host);
+    maximal_nodes_ = *mb_host;
+    exe_time_ = get_cur_time() - start_time_;
+    PrintResult();
+    if (time_count > 172800) {
+      exit(0);
+    }
+  }*/
+  #endif
   gpuErrchk(cudaGetLastError());
   gpuErrchk(cudaDeviceSynchronize());
-  printf("%d\n", host_test);
-  printf("non_maximal: %lld\n", host_non_maximal);
+  cudaMemcpy(&host_non_maximal, non_maximal, sizeof(unsigned long long), cudaMemcpyDeviceToHost);
+  //printf("non_maximal: %lld\n", host_non_maximal);
+  #ifndef PRINT_TIMELY
   gpuErrchk(cudaMemcpy(&maximal_nodes_, dev_mb_, sizeof(int),
                        cudaMemcpyDeviceToHost));
+  #else
+  maximal_nodes_ = * mb_host;
+  #endif
   exe_time_ = get_cur_time() - start_time_;
 }
 __launch_bounds__(32 * WARP_PER_SM, 1) __global__
     void IterFinderKernel_7(CSRBiGraph graph, int *global_buffer, 
-                            int *maximal_bicliques, int *processing_vertex, int end_vertex, 
+                            unsigned long long *maximal_bicliques, int *processing_vertex, int end_vertex, 
                             WorkList<LargeTask> *global_large_worklist, 
                             unsigned long long *global_count, 
                             unsigned long long *large_count, unsigned long long *tiny_count, unsigned long long *first_count, 
@@ -1349,7 +1653,7 @@ IterFinderGpu7::~IterFinderGpu7() {
 
 void IterFinderGpu7::Execute() {
   const int LargeSize = LARGE_WORKLIST_SIZE / ngpus;
-  printf("large worklist size: %d local tiny size: %d\n", LARGE_WORKLIST_SIZE, LOCAL_TINY_WORKLIST_SIZE);
+  //printf("large worklist size: %d local tiny size: %d\n", LARGE_WORKLIST_SIZE, LOCAL_TINY_WORKLIST_SIZE);
   cudaStream_t streams[ngpus];
   std::vector<cudaEvent_t>start_events(ngpus);
   std::vector<cudaEvent_t>preProcess_events(ngpus);
@@ -1363,7 +1667,8 @@ void IterFinderGpu7::Execute() {
 
   int *all_mb;
   cudaMallocHost(&all_mb, ngpus * sizeof(int));
-  int *local_processing_vertex[ngpus], *local_mb[ngpus], *local_global_buffer[ngpus], *host_processing_vertex, end_vertex[ngpus];
+  int *local_processing_vertex[ngpus], *local_global_buffer[ngpus], *host_processing_vertex, end_vertex[ngpus];
+  unsigned long long *local_mb[ngpus];
   cudaMallocHost(&host_processing_vertex, ngpus * sizeof(int));
   LargeTask *large_worklist_ptr[ngpus];
   LargeTask *lts[ngpus];
@@ -1397,7 +1702,7 @@ void IterFinderGpu7::Execute() {
     //std::cout<<i<<": "<<host_processing_vertex[i]<<" "<<end_vertex[i]<<std::endl;
     end_vertex[i] = vsize - 1;
     gpuErrchk(cudaMalloc((void **)&first_count[i], sizeof(unsigned long long)));
-    gpuErrchk(cudaMalloc((void **)&local_mb[i], sizeof(int)));
+    gpuErrchk(cudaMalloc((void **)&local_mb[i], sizeof(unsigned long long)));
     gpuErrchk(cudaMalloc((void **)&local_processing_vertex[i], sizeof(int)));
     gpuErrchk(cudaMalloc((void **)&large_worklist_ptr[i], sizeof(LargeTask) * LargeSize));
     gpuErrchk(cudaMalloc((void **)&global_count[i], sizeof(unsigned long long)));
@@ -1414,6 +1719,7 @@ void IterFinderGpu7::Execute() {
   }
   
   start_time_ = get_cur_time();
+
   for (int gid = 0; gid < ngpus; gid++) {
     gpuErrchk(cudaSetDevice(gid));
     gpuErrchk(cudaEventRecord(start_events[gid], streams[gid]))
@@ -1430,6 +1736,272 @@ void IterFinderGpu7::Execute() {
       *graph_gpu[gid], local_global_buffer[gid], local_mb[gid], local_processing_vertex[gid], 
       end_vertex[gid], global_large_worklist[gid],   
       global_count[gid], large_count[gid], tiny_count[gid], first_count[gid], isProcessed, ngpus);
+    gpuErrchk(cudaMemcpyAsync(&all_mb[gid], local_mb[gid], sizeof(int), cudaMemcpyDeviceToHost, streams[gid]))
+    gpuErrchk(cudaEventRecord(end_events[gid], streams[gid]))
+
+  }
+
+  for (int gid = 0; gid < ngpus; gid++) {
+    gpuErrchk(cudaStreamSynchronize(streams[gid]));
+    float time;
+    cudaEventElapsedTime(&time, start_events[gid], end_events[gid]);
+    std::cout<<"Processing time of gpu "<<gid<<": "<<time/1000<<"s"<<std::endl;
+    gpuErrchk(cudaStreamDestroy(streams[gid]));
+  }
+  maximal_nodes_ = 0;
+  for (int i = 0; i < ngpus; i++) {
+    std::cout<<"gpu "<<i<<": "<<all_mb[i]<<std::endl;
+    maximal_nodes_ += all_mb[i];
+  }
+  exe_time_ = get_cur_time() - start_time_;
+}
+
+__launch_bounds__(32 * WARP_PER_SM, 1) __global__
+    void IterFinderKernel_8(CSRBiGraph graph, int *global_buffer, 
+                            unsigned long long *maximal_bicliques, 
+                            WorkList<LargeTask> *global_large_worklist, 
+                            unsigned long long *global_count, 
+                            unsigned long long *large_count, unsigned long long *tiny_count, unsigned long long *first_count, 
+                            int *isProcessed, int ngpus, int channel_num) {
+  int warp_id = (blockIdx.x * blockDim.x + threadIdx.x) / warpSize;
+  int *warp_buffer = global_buffer + (size_t)BUFFER_PER_WARP_2 * warp_id +
+                     (size_t)SD_BUFFER_PER_BLOCK * (blockIdx.x + 1);
+  int local_mb_counter = 0;
+
+  __shared__ TinyTask local_tiny_worklist_ptr[LOCAL_TINY_WORKLIST_SIZE];
+  for (int i = threadIdx.x; i < LOCAL_TINY_WORKLIST_SIZE; i += blockDim.x) {
+    local_tiny_worklist_ptr[i].Init();
+  }
+  TinyTask *tiny_buffer = (TinyTask *)warp_buffer;
+  volatile unsigned long long &gc = *global_count;
+  volatile unsigned long long &lc = *large_count;
+  volatile unsigned long long &tc = *tiny_count;
+
+  unsigned long long llc = 0;
+  unsigned long long ltc = 0;
+
+  __shared__ WorkList<TinyTask> local_tiny_worklist;
+  __shared__ int allProcessed;
+  __shared__ int processed;
+  __shared__ int processing_vertex;
+  if (threadIdx.x == 0) {
+    local_tiny_worklist.Init(local_tiny_worklist_ptr, LOCAL_TINY_WORKLIST_SIZE);
+    allProcessed = 0;
+    processed = 0;
+    processing_vertex = graph.V_size;
+  }
+  volatile int &ap = allProcessed;
+  volatile int &pv = processing_vertex;
+
+  __threadfence_block();
+  __syncthreads();
+  
+  if (threadIdx.x / warpSize < 1) {
+    int channel = 0;
+    while (true) {
+      __syncwarp();
+      if (!ap && pv >= graph.V_size) {
+        if (get_lane_id() == 0) {
+          while (channel < channel_num && atomicCAS_system(&isProcessed[channel], 0, 1) == 1) {
+            channel++;
+          }
+          if (channel < channel_num) {
+            atomicExch(&processing_vertex, channel);
+          } else {
+            //printf("%d\n", blockIdx.x);
+            atomicExch(&allProcessed, 1);
+          }
+        }
+      }
+      if (global_large_worklist->get_work_num() > 0) {
+        LargeTask lt;
+        size_t get_num = global_large_worklist->get(lt);
+        if (get_num <= 0) continue;
+        int twn_p = LargeToTiny(graph, warp_buffer, lt, tiny_buffer);
+        if (get_lane_id() == 0) {
+          atomicAdd(tiny_count, twn_p);
+        }
+        int pushed = 0;
+        while (pushed < twn_p) {
+          __syncwarp();
+          if (local_tiny_worklist.get_work_num() < LOCAL_TINY_WORKLIST_THRESHOLD) {
+            size_t pushing = local_tiny_worklist.push_works(tiny_buffer + pushed, 
+                                                            twn_p - pushed);
+            pushed += pushing;
+          }
+        }
+        llc ++;
+        continue;
+      }
+      
+      if (pv >= graph.V_size && ap == 1) {
+        if (get_lane_id() == 0) {
+          //printf("%d %lld %lld %lld\n", channel, gc, lc, tc);
+          if (llc > 0) {
+            atomicAdd(large_count, -llc);
+            llc = 0;
+          }
+        }
+        if (gc == 0 && lc == 0 && tc == 0)break;
+      }
+    }
+  } 
+  else
+  {
+    int first_vertex = graph.V_size;
+    int lgc = 0;
+    while (true) {
+      __syncwarp();
+      if (!local_tiny_worklist.is_empty()) {
+        TinyTask tt;
+        if (local_tiny_worklist.get(tt)) {
+          IterFinderWithMultipleVertex(graph, warp_buffer, global_large_worklist, 
+                                       tt, local_mb_counter, large_count);
+          ltc++;
+          continue;
+        }
+      }
+      __syncwarp();
+      if (pv < graph.V_size || ap == 0) {
+        if (get_lane_id() == 0) {
+          first_vertex = atomicAdd(&processing_vertex, channel_num);
+          if (first_vertex >= 0 && first_vertex  < graph.V_size) {
+            atomicAdd(global_count, 1);
+          } 
+        }
+        first_vertex = get_value_from_lane_x(first_vertex);
+        if (first_vertex >= 0 && first_vertex < graph.V_size) {
+          LongTask lt(first_vertex, -1);
+          bool isLarge = IterFinderWithMultipleVertex(graph, warp_buffer, global_large_worklist, 
+                                       lt, local_mb_counter, large_count);
+          lgc ++;
+        }
+      } else {
+        if(get_lane_id() == 0) {
+          if (ltc > 0) {
+            atomicAdd(tiny_count, -ltc);
+            ltc = 0;
+          }
+          if (lgc > 0) {
+            atomicAdd(global_count, -lgc);
+            lgc = 0;
+          }
+        }
+        __syncwarp();
+        if (gc == 0 && lc == 0 && tc == 0)
+          break;
+      }
+    }
+  }
+  __syncthreads();
+  if (get_lane_id() == 0 && local_mb_counter != 0)  
+  {
+    atomicAdd(maximal_bicliques, local_mb_counter);
+  }
+}
+
+IterFinderGpu8::IterFinderGpu8(CSRBiGraph *graph_in, int ngpus_, int task_channel) : IterFinderGpu(graph_in) {
+  graph_gpu_ = graph_in;
+  vsize = graph_in->V_size;
+  int noGpus = 0;
+  gpuErrchk(cudaGetDeviceCount(&noGpus));
+  ngpus = std::min(noGpus, ngpus_);
+  task_channel_ = sqrt(ngpus_ * vsize);
+}
+
+IterFinderGpu8::~IterFinderGpu8() {
+  graph_gpu_->Reset();
+  delete graph_gpu_;
+  gpuErrchk(cudaFree(dev_global_buffer_));
+  gpuErrchk(cudaFree(dev_mb_));
+  gpuErrchk(cudaFree(dev_processing_vertex_));
+}
+
+void IterFinderGpu8::Execute() {
+  const int LargeSize = LARGE_WORKLIST_SIZE / ngpus;
+  //printf("large worklist size: %d local tiny size: %d\n", LARGE_WORKLIST_SIZE, LOCAL_TINY_WORKLIST_SIZE);
+  cudaStream_t streams[ngpus];
+  std::vector<cudaEvent_t>start_events(ngpus);
+  std::vector<cudaEvent_t>preProcess_events(ngpus);
+  std::vector<cudaEvent_t>end_events(ngpus);
+  WorkList<LargeTask> *global_large_worklist[ngpus];
+  WorkList<LargeTask> large_worklist[ngpus];
+  unsigned long long *global_count[ngpus];
+  unsigned long long *large_count[ngpus];
+  unsigned long long *tiny_count[ngpus];
+  unsigned long long *first_count[ngpus];
+
+  int *all_mb;
+  cudaMallocHost(&all_mb, ngpus * sizeof(int));
+  int *local_processing_vertex[ngpus], *local_global_buffer[ngpus], *host_processing_vertex, end_vertex[ngpus];
+  unsigned long long *local_mb[ngpus];
+  cudaMallocHost(&host_processing_vertex, ngpus * sizeof(int));
+  LargeTask *large_worklist_ptr[ngpus];
+  LargeTask *lts[ngpus];
+  for (int gid = 0; gid < ngpus; gid++) {
+    gpuErrchk(cudaMallocHost(&lts[gid], LARGE_WORKLIST_SIZE * sizeof(LargeTask)));
+    for (int i = 0; i < LARGE_WORKLIST_SIZE; i++) {
+      lts[gid][i] = LargeTask();
+    }
+  }
+  
+  size_t g_size = (size_t)MAX_BLOCKS * BUFFER_PER_BLOCK_2;
+  
+  int *isProcessed;
+  cudaMallocManaged(&isProcessed, sizeof(int) * task_channel_);
+  for (int i = 0; i < task_channel_; i++) {
+    isProcessed[i] = 0;
+  } 
+ 
+//init shared_worklist 
+  int *cost;
+  cudaMallocManaged(&cost, sizeof(int) * vsize);
+
+  CSRBiGraph *graph_gpu[ngpus]; 
+ 
+  for (int i = 0; i < ngpus; i++) {
+    cudaSetDevice(i);
+    graph_gpu[i] = new CSRBiGraph();
+    graph_gpu[i]->CopyToGpu(*graph_gpu_);
+    host_processing_vertex[i] = i;
+    //end_vertex[i] = std::min((i + 1) * verticesEachGpu, vsize) - 1;
+    //std::cout<<i<<": "<<host_processing_vertex[i]<<" "<<end_vertex[i]<<std::endl;
+    end_vertex[i] = vsize - 1;
+    gpuErrchk(cudaMalloc((void **)&first_count[i], sizeof(unsigned long long)));
+    gpuErrchk(cudaMalloc((void **)&local_mb[i], sizeof(unsigned long long)));
+    gpuErrchk(cudaMalloc((void **)&local_processing_vertex[i], sizeof(int)));
+    gpuErrchk(cudaMalloc((void **)&large_worklist_ptr[i], sizeof(LargeTask) * LargeSize));
+    gpuErrchk(cudaMalloc((void **)&global_count[i], sizeof(unsigned long long)));
+    gpuErrchk(cudaMalloc((void **)&large_count[i], sizeof(unsigned long long)));
+    gpuErrchk(cudaMalloc((void **)&tiny_count[i], sizeof(unsigned long long)));
+    gpuErrchk(cudaMalloc((void **)&global_large_worklist[i], sizeof(WorkList<LargeTask>)));
+    gpuErrchk(cudaMalloc((void **)&local_global_buffer[i], g_size * sizeof(int)));
+    large_worklist[i].Init(large_worklist_ptr[i], LargeSize, false);
+    
+    gpuErrchk(cudaStreamCreate(&streams[i]));
+    gpuErrchk(cudaEventCreate(&start_events[i]));
+    gpuErrchk(cudaEventCreate(&preProcess_events[i]));
+    gpuErrchk(cudaEventCreate(&end_events[i]));
+  }
+  
+  start_time_ = get_cur_time();
+
+  for (int gid = 0; gid < ngpus; gid++) {
+    gpuErrchk(cudaSetDevice(gid));
+    gpuErrchk(cudaEventRecord(start_events[gid], streams[gid]))
+    gpuErrchk(cudaMemcpyAsync(large_worklist_ptr[gid], lts[gid], LargeSize * sizeof(LargeTask), cudaMemcpyHostToDevice, streams[gid]));
+    gpuErrchk(cudaMemcpyAsync(global_large_worklist[gid], &large_worklist[gid], sizeof(WorkList<LargeTask>), cudaMemcpyHostToDevice, streams[gid]));
+    gpuErrchk(cudaMemsetAsync(global_count[gid], 0, sizeof(unsigned long long), streams[gid]));
+    gpuErrchk(cudaMemsetAsync(large_count[gid], 0, sizeof(unsigned long long), streams[gid]));
+    gpuErrchk(cudaMemsetAsync(tiny_count[gid], 0, sizeof(unsigned long long), streams[gid]));
+    gpuErrchk(cudaMemsetAsync(local_mb[gid], 0, sizeof(int), streams[gid]));
+    gpuErrchk(cudaMemsetAsync(first_count[gid], 0, sizeof(unsigned long long), streams[gid]));
+    gpuErrchk(cudaMemcpyAsync(local_processing_vertex[gid], &host_processing_vertex[gid], sizeof(int), cudaMemcpyHostToDevice, streams[gid]));
+    gpuErrchk(cudaMemsetAsync(local_global_buffer[gid], 0, g_size * sizeof(int), streams[gid]));
+    IterFinderKernel_8<<<MAX_BLOCKS, WARP_PER_BLOCK * 32, 0, streams[gid]>>>(
+      *graph_gpu[gid], local_global_buffer[gid], local_mb[gid], 
+      global_large_worklist[gid],   
+      global_count[gid], large_count[gid], tiny_count[gid], first_count[gid], isProcessed, ngpus, task_channel_);
     gpuErrchk(cudaMemcpyAsync(&all_mb[gid], local_mb[gid], sizeof(int), cudaMemcpyDeviceToHost, streams[gid]))
     gpuErrchk(cudaEventRecord(end_events[gid], streams[gid]))
 
