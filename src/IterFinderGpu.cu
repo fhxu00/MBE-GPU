@@ -1813,6 +1813,7 @@ __launch_bounds__(32 * WARP_PER_SM, 1) __global__
           }
         }
       }
+      __syncwarp();
       if (global_large_worklist->get_work_num() > 0) {
         LargeTask lt;
         size_t get_num = global_large_worklist->get(lt);
@@ -1833,15 +1834,16 @@ __launch_bounds__(32 * WARP_PER_SM, 1) __global__
         llc ++;
         continue;
       }
-      
+      __syncwarp(); 
       if (pv >= graph.V_size && ap == 1) {
         if (get_lane_id() == 0) {
-          //printf("%d %lld %lld %lld\n", channel, gc, lc, tc);
           if (llc > 0) {
             atomicAdd(large_count, -llc);
+            //printf("%d %lld %lld %lld\n",blockIdx.x, gc, lc, tc);
             llc = 0;
           }
         }
+        __syncwarp();
         if (gc == 0 && lc == 0 && tc == 0)break;
       }
     }
