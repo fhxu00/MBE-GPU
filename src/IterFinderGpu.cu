@@ -1077,7 +1077,7 @@ __device__ bool IterFinderWithMultipleVertex(CSRBiGraph graph, int *warp_buffer,
       if(vertices_size == 4) {
       } else {
         __syncwarp();
-        
+
         while (true){
           if (!global_large_worklist->is_full()) {
             if (global_large_worklist->push_work(tt))
@@ -1194,7 +1194,7 @@ __launch_bounds__(32 * WARP_PER_SM, 1) __global__
 
   __threadfence_block();
   __syncthreads();
-  
+ 
   if (threadIdx.x / warpSize < 1) {
     while (true) {
       /*bool exit = false;
@@ -1206,9 +1206,17 @@ __launch_bounds__(32 * WARP_PER_SM, 1) __global__
         break;
       }*/
       __syncwarp();
+      #ifdef SINGLE_LEVEL_QUEUE
+      if (local_tiny_worklist.get_work_num() > 0) {
+      #else 
       if (global_large_worklist->get_work_num() > 0) {
+      #endif
         LargeTask lt;
+        #ifdef SINGLE_LEVEL_QUEUE
+        size_t get_num = local_tiny_worklist.get(lt);
+        #else 
         size_t get_num = global_large_worklist->get(lt);
+        #endif
         if (get_num <= 0) continue;
 
         int twn_p = LargeToTiny(graph, warp_buffer, lt, tiny_buffer);
@@ -1226,9 +1234,15 @@ __launch_bounds__(32 * WARP_PER_SM, 1) __global__
             break;
           }*/
           __syncwarp();
+          #ifdef SINGLE_LEVEL_QUEUE
+          if (!global_large_worklist->is_full()) {
+            size_t pushing = global_large_worklist->push_works(tiny_buffer + pushed, 
+                                                            twn_p - pushed);
+          #else 
           if (local_tiny_worklist.get_work_num() < LOCAL_TINY_WORKLIST_THRESHOLD) {
             size_t pushing = local_tiny_worklist.push_works(tiny_buffer + pushed, 
                                                             twn_p - pushed);
+          #endif
             pushed += pushing;
           }
         }
@@ -1265,12 +1279,23 @@ __launch_bounds__(32 * WARP_PER_SM, 1) __global__
       }
       #endif
       __syncwarp();
+      #ifdef SINGLE_LEVEL_QUEUE
+      if (!global_large_worklist->is_empty()) {
+      #else
       if (!local_tiny_worklist.is_empty()) {
+      #endif
         TinyTask tt;
+        #ifdef SINGLE_LEVEL_QUEUE
+        if (global_large_worklist->get(tt)) {
+          IterFinderWithMultipleVertex(graph, warp_buffer, &local_tiny_worklist, 
+                                     tt, local_mb_counter, large_count
+                                     , non_maximal, bound_height, bound_size);
+        #else 
         if (local_tiny_worklist.get(tt)) {
           IterFinderWithMultipleVertex(graph, warp_buffer, global_large_worklist, 
                                      tt, local_mb_counter, large_count
                                      , non_maximal, bound_height, bound_size);
+        #endif
           ltc++;
           continue;
         }
@@ -1285,9 +1310,16 @@ __launch_bounds__(32 * WARP_PER_SM, 1) __global__
         first_vertex = get_value_from_lane_x(first_vertex);
         if (first_vertex >= 0) {
           LongTask lt(first_vertex, -1);
+          #ifdef SINGLE_LEVEL_QUEUE
+          IterFinderWithMultipleVertex(graph, warp_buffer, &local_tiny_worklist, 
+                                     lt, local_mb_counter, large_count
+                                     , non_maximal, bound_height, bound_size);
+          #else
           IterFinderWithMultipleVertex(graph, warp_buffer, global_large_worklist, 
                                      lt, local_mb_counter, large_count,  
                                      non_maximal, bound_height, bound_size);
+          #endif
+
           lgc ++;
         }
       }
@@ -1806,7 +1838,7 @@ __launch_bounds__(32 * WARP_PER_SM, 1) __global__
             channel++;
           }
           if (channel < channel_num) {
-            atomicExch(&processing_vertex, channel);
+            atomicExch(&processing_vertex, graph.V_size - 1 - channel);
           } else {
             //printf("%d\n", blockIdx.x);
             atomicExch(&allProcessed, 1);
@@ -1864,12 +1896,13 @@ __launch_bounds__(32 * WARP_PER_SM, 1) __global__
         }
       }
       __syncwarp();
-      if (pv < graph.V_size || ap == 0) {
+      if (pv < graph.V_size) {
         if (get_lane_id() == 0) {
-          first_vertex = atomicAdd(&processing_vertex, channel_num);
+          first_vertex = atomicAdd(&processing_vertex, -channel_num);
           if (first_vertex >= 0 && first_vertex  < graph.V_size) {
             atomicAdd(global_count, 1);
-          } 
+            //printf("%d\n", first_vertex);
+          }
         }
         first_vertex = get_value_from_lane_x(first_vertex);
         if (first_vertex >= 0 && first_vertex < graph.V_size) {
@@ -1878,7 +1911,7 @@ __launch_bounds__(32 * WARP_PER_SM, 1) __global__
                                        lt, local_mb_counter, large_count);
           lgc ++;
         }
-      } else {
+      } else if (ap == 1){
         if(get_lane_id() == 0) {
           if (ltc > 0) {
             atomicAdd(tiny_count, -ltc);
@@ -1898,7 +1931,7 @@ __launch_bounds__(32 * WARP_PER_SM, 1) __global__
   __syncthreads();
   if (get_lane_id() == 0 && local_mb_counter != 0)  
   {
-    atomicAdd(maximal_bicliques, local_mb_counter);
+    atomicAdd_system(maximal_bicliques, local_mb_counter);
   }
 }
 
