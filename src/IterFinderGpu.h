@@ -216,8 +216,26 @@ public:
   ~IterFinderGpu8();
   void Execute();
 private:
-  int ngpus, verticesEach, vsize, task_channel_;
+  int ngpus, vsize, task_channel_;
+};
+class IterFinderGpu9: public IterFinderGpu {
+public:
+  IterFinderGpu9() = delete;
+  IterFinderGpu9(CSRBiGraph *graph_in, int ngpus);
+  ~IterFinderGpu9();
+  void Execute();
+private:
+  int ngpus, verticesEachGpu, vsize;
+};
 
+class IterFinderGpu10: public IterFinderGpu {
+public:
+  IterFinderGpu10() = delete;
+  IterFinderGpu10(CSRBiGraph *graph_in, int ngpus);
+  ~IterFinderGpu10();
+  void Execute();
+private:
+  int ngpus, verticesEachGpu, vsize;
 };
 __device__ __forceinline__ int NeighborsIntersectL(CSRBiGraph &graph,
                                                    int *L_vertices, int L_size,
