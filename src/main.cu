@@ -106,8 +106,9 @@ int main(int argc, char* argv[]) {
   int bound_size = 1500;
   char graph_name[80] = "db/Writers.adj";
   int limit = 0;
+  int alpha = 1;
 
-  while ((op = getopt(argc, argv, "l:h:x:i:s:m:n:t:o:fp")) != -1) {
+  while ((op = getopt(argc, argv, "l:h:x:i:s:m:n:t:o:fpa:")) != -1) {
     switch (op) {
       case 'i':
         memcpy(graph_name, optarg, strlen(optarg) + 1);
@@ -138,6 +139,9 @@ int main(int argc, char* argv[]) {
         break;
       case 'l':
         limit = atoi(optarg);
+        break;
+      case 'a':
+        alpha = atoi(optarg);
         break;
     }
   }
@@ -179,7 +183,7 @@ int main(int argc, char* argv[]) {
       finder_global = new IterFinderGpu7(graph, ngpus);
       break;
     case 4: 
-      finder_global = new IterFinderGpu8(graph, ngpus, 0);
+      finder_global = new IterFinderGpu8(graph, ngpus, alpha);
       break;
     case 5:
       finder_global = new IterFinderGpu9(graph, ngpus);

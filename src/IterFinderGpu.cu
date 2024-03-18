@@ -1935,13 +1935,13 @@ __launch_bounds__(32 * WARP_PER_SM, 1) __global__
   }
 }
 
-IterFinderGpu8::IterFinderGpu8(CSRBiGraph *graph_in, int ngpus_, int task_channel) : IterFinderGpu(graph_in) {
+IterFinderGpu8::IterFinderGpu8(CSRBiGraph *graph_in, int ngpus_, int alpha) : IterFinderGpu(graph_in) {
   graph_gpu_ = graph_in;
   vsize = graph_in->V_size;
   int noGpus = 0;
   gpuErrchk(cudaGetDeviceCount(&noGpus));
   ngpus = std::min(noGpus, ngpus_);
-  task_channel_ = sqrt(ngpus_ * vsize);
+  task_channel_ = alpha * MAX_SM * ngpus;
 }
 
 IterFinderGpu8::~IterFinderGpu8() {
