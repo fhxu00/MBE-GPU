@@ -181,6 +181,13 @@ int main(int argc, char* argv[]) {
     case 4: 
       finder_global = new IterFinderGpu8(graph, ngpus, 0);
       break;
+    case 5:
+      finder_global = new IterFinderGpu9(graph, ngpus);
+      break;
+    case 6:
+      finder_global = new IterFinderGpu10(graph, ngpus);
+      break;
+      
   }
   FinderTest(finder_global);
 }

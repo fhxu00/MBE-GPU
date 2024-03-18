@@ -2056,3 +2056,628 @@ void IterFinderGpu8::Execute() {
   }
   exe_time_ = get_cur_time() - start_time_;
 }
+
+__launch_bounds__(32 * WARP_PER_SM, 1) __global__
+    void IterFinderKernel_9(CSRBiGraph graph, int *global_buffer, 
+                            unsigned long long *maximal_bicliques, int *processing_vertex, int start_vertex,  int end_vertex,
+                            WorkList<LargeTask> *global_large_worklist, 
+                            unsigned long long *global_count, 
+                            unsigned long long *large_count, unsigned long long *tiny_count, unsigned long long *first_count, 
+                            int *isProcessed, int ngpus) {
+  int warp_id = (blockIdx.x * blockDim.x + threadIdx.x) / warpSize;
+  int *warp_buffer = global_buffer + (size_t)BUFFER_PER_WARP_2 * warp_id +
+                     (size_t)SD_BUFFER_PER_BLOCK * (blockIdx.x + 1);
+  int local_mb_counter = 0;
+
+  __shared__ TinyTask local_tiny_worklist_ptr[LOCAL_TINY_WORKLIST_SIZE];
+  for (int i = threadIdx.x; i < LOCAL_TINY_WORKLIST_SIZE; i += blockDim.x) {
+    local_tiny_worklist_ptr[i].Init();
+  }
+  TinyTask *tiny_buffer = (TinyTask *)warp_buffer;
+  volatile unsigned long long &gc = *global_count;
+  volatile unsigned long long &lc = *large_count;
+  volatile unsigned long long &tc = *tiny_count;
+  volatile unsigned long long &fc = *first_count;
+
+  unsigned long long llc = 0;
+  unsigned long long ltc = 0;
+
+  __shared__ int pvLarge;
+  __shared__ WorkList<TinyTask> local_tiny_worklist;
+  __shared__ int allProcessed;
+  __shared__ int processed;
+  if (threadIdx.x == 0) {
+    local_tiny_worklist.Init(local_tiny_worklist_ptr, LOCAL_TINY_WORKLIST_SIZE);
+    pvLarge = 0;
+    allProcessed = 0;
+    processed = 0;
+  }
+  volatile int &ap = allProcessed;
+  volatile int &volpvLarge = pvLarge;
+
+  __threadfence_block();
+  __syncthreads();
+  
+  if (threadIdx.x / warpSize < 1) {
+    while (true) {
+      __syncwarp();
+      if (global_large_worklist->get_work_num() > 0) {
+        LargeTask lt;
+        size_t get_num = global_large_worklist->get(lt);
+        if (get_num <= 0) continue;
+        int twn_p = LargeToTiny(graph, warp_buffer, lt, tiny_buffer);
+        if (get_lane_id() == 0) {
+          atomicAdd(tiny_count, twn_p);
+        }
+        int pushed = 0;
+        while (pushed < twn_p) {
+          __syncwarp();
+          if (local_tiny_worklist.get_work_num() < LOCAL_TINY_WORKLIST_THRESHOLD) {
+            size_t pushing = local_tiny_worklist.push_works(tiny_buffer + pushed, 
+                                                            twn_p - pushed);
+            pushed += pushing;
+          }
+        }
+        llc ++;
+        if (get_lane_id() == 0 && lt.vertices[1] == -1) {
+          atomicAdd(first_count , -1);
+          //printf("fc: %lld\n", fc);
+        }
+        continue;
+      }
+      /*if (worklist_system->get_work_num() > 0) {
+        LargeTask lt;
+        size_t get_num = worklist_system->get(lt);
+        if (get_num <= 0) continue;
+        int twn_p = LargeToTiny(graph, warp_buffer, lt, tiny_buffer);
+        if (get_lane_id() == 0) {
+          atomicAdd(tiny_count, twn_p);
+        }
+        int pushed = 0;
+        while (pushed < twn_p) {
+          __syncwarp();
+          if (local_tiny_worklist.get_work_num() < LOCAL_TINY_WORKLIST_THRESHOLD) {
+            size_t pushing = local_tiny_worklist.push_works(tiny_buffer + pushed, 
+                                                            twn_p - pushed);
+            pushed += pushing;
+          }
+        }
+        lsc ++;
+        continue;
+      }*/
+      if (volpvLarge == 1 && ap == 1) {
+        if (get_lane_id() == 0) {
+          if (llc > 0) {
+            atomicAdd(large_count, -llc);
+            llc = 0;
+          }
+        }
+	//if (get_lane_id() == 0)printf("%d %d %d %d\n", gc, lc, tc, test); 
+        if (gc == 0 && lc == 0 && tc == 0)break;
+      }
+    }
+  } 
+  else
+  {
+    int first_vertex = end_vertex;
+    int lgc = 0;
+    while (true) {
+      __syncwarp();
+      if (!local_tiny_worklist.is_empty()) {
+        TinyTask tt;
+        if (local_tiny_worklist.get(tt)) {
+          //if (global_large_worklist -> get_work_num() < LARGE_WORKLIST_THRESHOLD) {
+          //  IterFinderWithMultipleVertex(graph, warp_buffer, worklist_system, 
+          //                             tt, local_mb_counter, system_count);
+          //} else {
+          IterFinderWithMultipleVertex(graph, warp_buffer, global_large_worklist, 
+                                       tt, local_mb_counter, large_count);
+          //}
+          ltc++;
+          continue;
+        }
+      }
+      __syncwarp();
+      if (volpvLarge == 0 || ap == 0) {
+        //if (global_large_worklist -> get_work_num() > 0) continue; 
+        if (get_lane_id() == 0) {
+          first_vertex = -1;
+          int tfc;
+          bool localIsEmpty;
+          do {
+            localIsEmpty = local_tiny_worklist.is_empty();
+            tfc = fc; 
+          } while (tfc < MAX_BLOCKS * 4 && localIsEmpty  && atomicCAS(first_count, tfc, tfc + 1) != tfc); 
+          if (tfc < MAX_BLOCKS * 4 && localIsEmpty) {
+            first_vertex = end_vertex - atomicAdd(processing_vertex, 1);
+            if (first_vertex >= start_vertex) {
+              atomicAdd(global_count, 1);
+            } else {
+              atomicExch(&pvLarge, 1);
+              atomicExch(&allProcessed, 1);
+            }
+            if (first_vertex < start_vertex || first_vertex > end_vertex) {
+              atomicAdd(first_count, -1);
+              //printf("fc: %d\n", fc);
+            }
+          }
+        }
+        first_vertex = get_value_from_lane_x(first_vertex);
+        if (first_vertex >= start_vertex && first_vertex <= end_vertex) {
+          //if(get_lane_id() == 0)printf("fv: %d\n", first_vertex);
+          LongTask lt(first_vertex, -1);
+          //if (global_large_worklist -> get_work_num() < LARGE_WORKLIST_THRESHOLD) {
+          //  IterFinderWithMultipleVertex(graph, warp_buffer, worklist_system, 
+          //                             lt, local_mb_counter, system_count);
+          //} else {
+          bool isLarge = IterFinderWithMultipleVertex(graph, warp_buffer, global_large_worklist, 
+                                       lt, local_mb_counter, large_count);
+          //}
+          if (get_lane_id() == 0 && !isLarge) {
+            atomicAdd(first_count, -1); 
+            //printf("fc: %d\n", fc);
+          }
+          lgc ++;
+        }
+      } else {
+        if(get_lane_id() == 0) {
+          if (ltc > 0) {
+            atomicAdd(tiny_count, -ltc);
+            ltc = 0;
+          }
+          if (lgc > 0) {
+            atomicAdd(global_count, -lgc);
+            lgc = 0;
+          }
+        }
+        __syncwarp();
+        //printf("%d %d %d\n", gc, lc, tc);
+        if (gc == 0 && lc == 0 && tc == 0)
+          break;
+      }
+    }
+  }
+  __syncthreads();
+  if (get_lane_id() == 0 && local_mb_counter != 0)  
+  {
+    atomicAdd(maximal_bicliques, local_mb_counter);
+  }
+}
+IterFinderGpu9::IterFinderGpu9(CSRBiGraph *graph_in, int ngpus_) : IterFinderGpu(graph_in) {
+  graph_gpu_ = graph_in;
+  vsize = graph_in->V_size;
+  int noGpus = 0;
+  gpuErrchk(cudaGetDeviceCount(&noGpus));
+  ngpus = std::min(noGpus, ngpus_);
+  verticesEachGpu = (vsize + ngpus) / ngpus; 
+}
+
+IterFinderGpu9::~IterFinderGpu9() {
+  graph_gpu_->Reset();
+  delete graph_gpu_;
+  gpuErrchk(cudaFree(dev_global_buffer_));
+  gpuErrchk(cudaFree(dev_mb_));
+  gpuErrchk(cudaFree(dev_processing_vertex_));
+}
+
+void IterFinderGpu9::Execute() {
+  const int LargeSize = LARGE_WORKLIST_SIZE / ngpus;
+  //printf("large worklist size: %d local tiny size: %d\n", LARGE_WORKLIST_SIZE, LOCAL_TINY_WORKLIST_SIZE);
+  cudaStream_t streams[ngpus];
+  std::vector<cudaEvent_t>start_events(ngpus);
+  std::vector<cudaEvent_t>preProcess_events(ngpus);
+  std::vector<cudaEvent_t>end_events(ngpus);
+  WorkList<LargeTask> *global_large_worklist[ngpus];
+  WorkList<LargeTask> large_worklist[ngpus];
+  unsigned long long *global_count[ngpus];
+  unsigned long long *large_count[ngpus];
+  unsigned long long *tiny_count[ngpus];
+  unsigned long long *first_count[ngpus];
+
+  int *all_mb;
+  cudaMallocHost(&all_mb, ngpus * sizeof(int));
+  int *local_processing_vertex[ngpus], *local_global_buffer[ngpus], *host_processing_vertex, end_vertex[ngpus];
+  unsigned long long *local_mb[ngpus];
+  cudaMallocHost(&host_processing_vertex, ngpus * sizeof(int));
+  LargeTask *large_worklist_ptr[ngpus];
+  LargeTask *lts[ngpus];
+  for (int gid = 0; gid < ngpus; gid++) {
+    gpuErrchk(cudaMallocHost(&lts[gid], LARGE_WORKLIST_SIZE * sizeof(LargeTask)));
+    for (int i = 0; i < LARGE_WORKLIST_SIZE; i++) {
+      lts[gid][i] = LargeTask();
+    }
+  }
+  
+  size_t g_size = (size_t)MAX_BLOCKS * BUFFER_PER_BLOCK_2;
+  
+  int *isProcessed;
+  cudaMallocManaged(&isProcessed, sizeof(int) * vsize);
+  for (int i = 0; i < vsize; i++) {
+    isProcessed[i] = 0;
+  } 
+ 
+//init shared_worklist 
+  int *cost;
+  cudaMallocManaged(&cost, sizeof(int) * vsize);
+
+  CSRBiGraph *graph_gpu[ngpus]; 
+ 
+  for (int i = 0; i < ngpus; i++) {
+    cudaSetDevice(i);
+    graph_gpu[i] = new CSRBiGraph();
+    graph_gpu[i]->CopyToGpu(*graph_gpu_);
+    host_processing_vertex[i] = i;
+    end_vertex[i] = std::min((i + 1) * verticesEachGpu, vsize) - 1;
+    //std::cout<<i<<": "<<host_processing_vertex[i]<<" "<<end_vertex[i]<<std::endl;
+    //end_vertex[i] = vsize - 1;
+    gpuErrchk(cudaMalloc((void **)&first_count[i], sizeof(unsigned long long)));
+    gpuErrchk(cudaMalloc((void **)&local_mb[i], sizeof(unsigned long long)));
+    gpuErrchk(cudaMalloc((void **)&local_processing_vertex[i], sizeof(int)));
+    gpuErrchk(cudaMalloc((void **)&large_worklist_ptr[i], sizeof(LargeTask) * LargeSize));
+    gpuErrchk(cudaMalloc((void **)&global_count[i], sizeof(unsigned long long)));
+    gpuErrchk(cudaMalloc((void **)&large_count[i], sizeof(unsigned long long)));
+    gpuErrchk(cudaMalloc((void **)&tiny_count[i], sizeof(unsigned long long)));
+    gpuErrchk(cudaMalloc((void **)&global_large_worklist[i], sizeof(WorkList<LargeTask>)));
+    gpuErrchk(cudaMalloc((void **)&local_global_buffer[i], g_size * sizeof(int)));
+    large_worklist[i].Init(large_worklist_ptr[i], LargeSize, false);
+    
+    gpuErrchk(cudaStreamCreate(&streams[i]));
+    gpuErrchk(cudaEventCreate(&start_events[i]));
+    gpuErrchk(cudaEventCreate(&preProcess_events[i]));
+    gpuErrchk(cudaEventCreate(&end_events[i]));
+  }
+  
+  start_time_ = get_cur_time();
+
+  for (int gid = 0; gid < ngpus; gid++) {
+    gpuErrchk(cudaSetDevice(gid));
+    gpuErrchk(cudaEventRecord(start_events[gid], streams[gid]))
+    gpuErrchk(cudaMemcpyAsync(large_worklist_ptr[gid], lts[gid], LargeSize * sizeof(LargeTask), cudaMemcpyHostToDevice, streams[gid]));
+    gpuErrchk(cudaMemcpyAsync(global_large_worklist[gid], &large_worklist[gid], sizeof(WorkList<LargeTask>), cudaMemcpyHostToDevice, streams[gid]));
+    gpuErrchk(cudaMemsetAsync(global_count[gid], 0, sizeof(unsigned long long), streams[gid]));
+    gpuErrchk(cudaMemsetAsync(large_count[gid], 0, sizeof(unsigned long long), streams[gid]));
+    gpuErrchk(cudaMemsetAsync(tiny_count[gid], 0, sizeof(unsigned long long), streams[gid]));
+    gpuErrchk(cudaMemsetAsync(local_mb[gid], 0, sizeof(int), streams[gid]));
+    gpuErrchk(cudaMemsetAsync(first_count[gid], 0, sizeof(unsigned long long), streams[gid]));
+    gpuErrchk(cudaMemcpyAsync(local_processing_vertex[gid], &host_processing_vertex[gid], sizeof(int), cudaMemcpyHostToDevice, streams[gid]));
+    gpuErrchk(cudaMemsetAsync(local_global_buffer[gid], 0, g_size * sizeof(int), streams[gid]));
+    int start_vertex = 0;
+    if (gid > 0) {
+      start_vertex = end_vertex[gid - 1] + 1;
+    }
+    IterFinderKernel_9<<<MAX_BLOCKS, WARP_PER_BLOCK * 32, 0, streams[gid]>>>(
+      *graph_gpu[gid], local_global_buffer[gid], local_mb[gid], local_processing_vertex[gid], start_vertex, 
+      end_vertex[gid], global_large_worklist[gid],   
+      global_count[gid], large_count[gid], tiny_count[gid], first_count[gid], isProcessed, ngpus);
+    gpuErrchk(cudaMemcpyAsync(&all_mb[gid], local_mb[gid], sizeof(int), cudaMemcpyDeviceToHost, streams[gid]))
+    gpuErrchk(cudaEventRecord(end_events[gid], streams[gid]))
+
+  }
+
+  for (int gid = 0; gid < ngpus; gid++) {
+    gpuErrchk(cudaStreamSynchronize(streams[gid]));
+    float time;
+    cudaEventElapsedTime(&time, start_events[gid], end_events[gid]);
+    std::cout<<"Processing time of gpu "<<gid<<": "<<time/1000<<"s"<<std::endl;
+    gpuErrchk(cudaStreamDestroy(streams[gid]));
+  }
+  maximal_nodes_ = 0;
+  for (int i = 0; i < ngpus; i++) {
+    std::cout<<"gpu "<<i<<": "<<all_mb[i]<<std::endl;
+    maximal_nodes_ += all_mb[i];
+  }
+  exe_time_ = get_cur_time() - start_time_;
+}
+
+__launch_bounds__(32 * WARP_PER_SM, 1) __global__
+    void IterFinderKernel_10(CSRBiGraph graph, int *global_buffer, 
+                            unsigned long long *maximal_bicliques, int *processing_vertex, int start_vertex,  int end_vertex,
+                            WorkList<LargeTask> *global_large_worklist, 
+                            unsigned long long *global_count, 
+                            unsigned long long *large_count, unsigned long long *tiny_count, unsigned long long *first_count, 
+                            int *isProcessed, int ngpus) {
+  int warp_id = (blockIdx.x * blockDim.x + threadIdx.x) / warpSize;
+  int *warp_buffer = global_buffer + (size_t)BUFFER_PER_WARP_2 * warp_id +
+                     (size_t)SD_BUFFER_PER_BLOCK * (blockIdx.x + 1);
+  int local_mb_counter = 0;
+
+  __shared__ TinyTask local_tiny_worklist_ptr[LOCAL_TINY_WORKLIST_SIZE];
+  for (int i = threadIdx.x; i < LOCAL_TINY_WORKLIST_SIZE; i += blockDim.x) {
+    local_tiny_worklist_ptr[i].Init();
+  }
+  TinyTask *tiny_buffer = (TinyTask *)warp_buffer;
+  volatile unsigned long long &gc = *global_count;
+  volatile unsigned long long &lc = *large_count;
+  volatile unsigned long long &tc = *tiny_count;
+  volatile unsigned long long &fc = *first_count;
+
+  unsigned long long llc = 0;
+  unsigned long long ltc = 0;
+
+  __shared__ int pvLarge;
+  __shared__ WorkList<TinyTask> local_tiny_worklist;
+  __shared__ int allProcessed;
+  __shared__ int processed;
+  if (threadIdx.x == 0) {
+    local_tiny_worklist.Init(local_tiny_worklist_ptr, LOCAL_TINY_WORKLIST_SIZE);
+    pvLarge = 0;
+    allProcessed = 0;
+    processed = 0;
+  }
+  volatile int &ap = allProcessed;
+  volatile int &volpvLarge = pvLarge;
+
+  __threadfence_block();
+  __syncthreads();
+  
+  if (threadIdx.x / warpSize < 1) {
+    while (true) {
+      __syncwarp();
+      if (global_large_worklist->get_work_num() > 0) {
+        LargeTask lt;
+        size_t get_num = global_large_worklist->get(lt);
+        if (get_num <= 0) continue;
+        int twn_p = LargeToTiny(graph, warp_buffer, lt, tiny_buffer);
+        if (get_lane_id() == 0) {
+          atomicAdd(tiny_count, twn_p);
+        }
+        int pushed = 0;
+        while (pushed < twn_p) {
+          __syncwarp();
+          if (local_tiny_worklist.get_work_num() < LOCAL_TINY_WORKLIST_THRESHOLD) {
+            size_t pushing = local_tiny_worklist.push_works(tiny_buffer + pushed, 
+                                                            twn_p - pushed);
+            pushed += pushing;
+          }
+        }
+        llc ++;
+        if (get_lane_id() == 0 && lt.vertices[1] == -1) {
+          atomicAdd(first_count , -1);
+          //printf("fc: %lld\n", fc);
+        }
+        continue;
+      }
+      /*if (worklist_system->get_work_num() > 0) {
+        LargeTask lt;
+        size_t get_num = worklist_system->get(lt);
+        if (get_num <= 0) continue;
+        int twn_p = LargeToTiny(graph, warp_buffer, lt, tiny_buffer);
+        if (get_lane_id() == 0) {
+          atomicAdd(tiny_count, twn_p);
+        }
+        int pushed = 0;
+        while (pushed < twn_p) {
+          __syncwarp();
+          if (local_tiny_worklist.get_work_num() < LOCAL_TINY_WORKLIST_THRESHOLD) {
+            size_t pushing = local_tiny_worklist.push_works(tiny_buffer + pushed, 
+                                                            twn_p - pushed);
+            pushed += pushing;
+          }
+        }
+        lsc ++;
+        continue;
+      }*/
+      if (volpvLarge == 1 && ap == 1) {
+        if (get_lane_id() == 0) {
+          if (llc > 0) {
+            atomicAdd(large_count, -llc);
+            llc = 0;
+          }
+        }
+	//if (get_lane_id() == 0)printf("%d %d %d %d\n", gc, lc, tc, test); 
+        if (gc == 0 && lc == 0 && tc == 0)break;
+      }
+    }
+  } 
+  else
+  {
+    int first_vertex = end_vertex;
+    int lgc = 0;
+    while (true) {
+      __syncwarp();
+      if (!local_tiny_worklist.is_empty()) {
+        TinyTask tt;
+        if (local_tiny_worklist.get(tt)) {
+          //if (global_large_worklist -> get_work_num() < LARGE_WORKLIST_THRESHOLD) {
+          //  IterFinderWithMultipleVertex(graph, warp_buffer, worklist_system, 
+          //                             tt, local_mb_counter, system_count);
+          //} else {
+          IterFinderWithMultipleVertex(graph, warp_buffer, global_large_worklist, 
+                                       tt, local_mb_counter, large_count);
+          //}
+          ltc++;
+          continue;
+        }
+      }
+      __syncwarp();
+      if (volpvLarge == 0 || ap == 0) {
+        //if (global_large_worklist -> get_work_num() > 0) continue; 
+        if (get_lane_id() == 0) {
+          first_vertex = -1;
+          int tfc;
+          bool localIsEmpty;
+          do {
+            localIsEmpty = local_tiny_worklist.is_empty();
+            tfc = fc; 
+          } while (tfc < MAX_BLOCKS * 4 && localIsEmpty  && atomicCAS(first_count, tfc, tfc + 1) != tfc); 
+          if (tfc < MAX_BLOCKS * 4 && localIsEmpty) {
+            first_vertex = end_vertex - atomicAdd(processing_vertex, ngpus);
+            if (first_vertex >= start_vertex) {
+              atomicAdd(global_count, 1);
+            } else {
+              atomicExch(&pvLarge, 1);
+              atomicExch(&allProcessed, 1);
+            }
+            if (first_vertex < start_vertex || first_vertex > end_vertex) {
+              atomicAdd(first_count, -1);
+              //printf("fc: %d\n", fc);
+            }
+          }
+        }
+        first_vertex = get_value_from_lane_x(first_vertex);
+        if (first_vertex >= start_vertex && first_vertex <= end_vertex) {
+          //if(get_lane_id() == 0)printf("fv: %d\n", first_vertex);
+          LongTask lt(first_vertex, -1);
+          //if (global_large_worklist -> get_work_num() < LARGE_WORKLIST_THRESHOLD) {
+          //  IterFinderWithMultipleVertex(graph, warp_buffer, worklist_system, 
+          //                             lt, local_mb_counter, system_count);
+          //} else {
+          bool isLarge = IterFinderWithMultipleVertex(graph, warp_buffer, global_large_worklist, 
+                                       lt, local_mb_counter, large_count);
+          //}
+          if (get_lane_id() == 0 && !isLarge) {
+            atomicAdd(first_count, -1); 
+            //printf("fc: %d\n", fc);
+          }
+          lgc ++;
+        }
+      } else {
+        if(get_lane_id() == 0) {
+          if (ltc > 0) {
+            atomicAdd(tiny_count, -ltc);
+            ltc = 0;
+          }
+          if (lgc > 0) {
+            atomicAdd(global_count, -lgc);
+            lgc = 0;
+          }
+        }
+        __syncwarp();
+        //printf("%d %d %d\n", gc, lc, tc);
+        if (gc == 0 && lc == 0 && tc == 0)
+          break;
+      }
+    }
+  }
+  __syncthreads();
+  if (get_lane_id() == 0 && local_mb_counter != 0)  
+  {
+    atomicAdd(maximal_bicliques, local_mb_counter);
+  }
+}
+IterFinderGpu10::IterFinderGpu10(CSRBiGraph *graph_in, int ngpus_) : IterFinderGpu(graph_in) {
+  graph_gpu_ = graph_in;
+  vsize = graph_in->V_size;
+  int noGpus = 0;
+  gpuErrchk(cudaGetDeviceCount(&noGpus));
+  ngpus = std::min(noGpus, ngpus_);
+  verticesEachGpu = (vsize + ngpus) / ngpus; 
+}
+
+IterFinderGpu10::~IterFinderGpu10() {
+  graph_gpu_->Reset();
+  delete graph_gpu_;
+  gpuErrchk(cudaFree(dev_global_buffer_));
+  gpuErrchk(cudaFree(dev_mb_));
+  gpuErrchk(cudaFree(dev_processing_vertex_));
+}
+
+void IterFinderGpu10::Execute() {
+  const int LargeSize = LARGE_WORKLIST_SIZE / ngpus;
+  //printf("large worklist size: %d local tiny size: %d\n", LARGE_WORKLIST_SIZE, LOCAL_TINY_WORKLIST_SIZE);
+  cudaStream_t streams[ngpus];
+  std::vector<cudaEvent_t>start_events(ngpus);
+  std::vector<cudaEvent_t>preProcess_events(ngpus);
+  std::vector<cudaEvent_t>end_events(ngpus);
+  WorkList<LargeTask> *global_large_worklist[ngpus];
+  WorkList<LargeTask> large_worklist[ngpus];
+  unsigned long long *global_count[ngpus];
+  unsigned long long *large_count[ngpus];
+  unsigned long long *tiny_count[ngpus];
+  unsigned long long *first_count[ngpus];
+
+  int *all_mb;
+  cudaMallocHost(&all_mb, ngpus * sizeof(int));
+  int *local_processing_vertex[ngpus], *local_global_buffer[ngpus], *host_processing_vertex, end_vertex[ngpus];
+  unsigned long long *local_mb[ngpus];
+  cudaMallocHost(&host_processing_vertex, ngpus * sizeof(int));
+  LargeTask *large_worklist_ptr[ngpus];
+  LargeTask *lts[ngpus];
+  for (int gid = 0; gid < ngpus; gid++) {
+    gpuErrchk(cudaMallocHost(&lts[gid], LARGE_WORKLIST_SIZE * sizeof(LargeTask)));
+    for (int i = 0; i < LARGE_WORKLIST_SIZE; i++) {
+      lts[gid][i] = LargeTask();
+    }
+  }
+  
+  size_t g_size = (size_t)MAX_BLOCKS * BUFFER_PER_BLOCK_2;
+  
+  int *isProcessed;
+  cudaMallocManaged(&isProcessed, sizeof(int) * vsize);
+  for (int i = 0; i < vsize; i++) {
+    isProcessed[i] = 0;
+  } 
+ 
+//init shared_worklist 
+  int *cost;
+  cudaMallocManaged(&cost, sizeof(int) * vsize);
+
+  CSRBiGraph *graph_gpu[ngpus]; 
+ 
+  for (int i = 0; i < ngpus; i++) {
+    cudaSetDevice(i);
+    graph_gpu[i] = new CSRBiGraph();
+    graph_gpu[i]->CopyToGpu(*graph_gpu_);
+    host_processing_vertex[i] = i;
+    end_vertex[i] = std::min((i + 1) * verticesEachGpu, vsize) - 1;
+    //std::cout<<i<<": "<<host_processing_vertex[i]<<" "<<end_vertex[i]<<std::endl;
+    //end_vertex[i] = vsize - 1;
+    gpuErrchk(cudaMalloc((void **)&first_count[i], sizeof(unsigned long long)));
+    gpuErrchk(cudaMalloc((void **)&local_mb[i], sizeof(unsigned long long)));
+    gpuErrchk(cudaMalloc((void **)&local_processing_vertex[i], sizeof(int)));
+    gpuErrchk(cudaMalloc((void **)&large_worklist_ptr[i], sizeof(LargeTask) * LargeSize));
+    gpuErrchk(cudaMalloc((void **)&global_count[i], sizeof(unsigned long long)));
+    gpuErrchk(cudaMalloc((void **)&large_count[i], sizeof(unsigned long long)));
+    gpuErrchk(cudaMalloc((void **)&tiny_count[i], sizeof(unsigned long long)));
+    gpuErrchk(cudaMalloc((void **)&global_large_worklist[i], sizeof(WorkList<LargeTask>)));
+    gpuErrchk(cudaMalloc((void **)&local_global_buffer[i], g_size * sizeof(int)));
+    large_worklist[i].Init(large_worklist_ptr[i], LargeSize, false);
+    
+    gpuErrchk(cudaStreamCreate(&streams[i]));
+    gpuErrchk(cudaEventCreate(&start_events[i]));
+    gpuErrchk(cudaEventCreate(&preProcess_events[i]));
+    gpuErrchk(cudaEventCreate(&end_events[i]));
+  }
+  
+  start_time_ = get_cur_time();
+
+  for (int gid = 0; gid < ngpus; gid++) {
+    gpuErrchk(cudaSetDevice(gid));
+    gpuErrchk(cudaEventRecord(start_events[gid], streams[gid]))
+    gpuErrchk(cudaMemcpyAsync(large_worklist_ptr[gid], lts[gid], LargeSize * sizeof(LargeTask), cudaMemcpyHostToDevice, streams[gid]));
+    gpuErrchk(cudaMemcpyAsync(global_large_worklist[gid], &large_worklist[gid], sizeof(WorkList<LargeTask>), cudaMemcpyHostToDevice, streams[gid]));
+    gpuErrchk(cudaMemsetAsync(global_count[gid], 0, sizeof(unsigned long long), streams[gid]));
+    gpuErrchk(cudaMemsetAsync(large_count[gid], 0, sizeof(unsigned long long), streams[gid]));
+    gpuErrchk(cudaMemsetAsync(tiny_count[gid], 0, sizeof(unsigned long long), streams[gid]));
+    gpuErrchk(cudaMemsetAsync(local_mb[gid], 0, sizeof(int), streams[gid]));
+    gpuErrchk(cudaMemsetAsync(first_count[gid], 0, sizeof(unsigned long long), streams[gid]));
+    gpuErrchk(cudaMemcpyAsync(local_processing_vertex[gid], &host_processing_vertex[gid], sizeof(int), cudaMemcpyHostToDevice, streams[gid]));
+    gpuErrchk(cudaMemsetAsync(local_global_buffer[gid], 0, g_size * sizeof(int), streams[gid]));
+    int start_vertex = 0;
+    if (gid > 0) {
+      start_vertex = end_vertex[gid - 1] + 1;
+    }
+    IterFinderKernel_9<<<MAX_BLOCKS, WARP_PER_BLOCK * 32, 0, streams[gid]>>>(
+      *graph_gpu[gid], local_global_buffer[gid], local_mb[gid], local_processing_vertex[gid], start_vertex, 
+      end_vertex[gid], global_large_worklist[gid],   
+      global_count[gid], large_count[gid], tiny_count[gid], first_count[gid], isProcessed, ngpus);
+    gpuErrchk(cudaMemcpyAsync(&all_mb[gid], local_mb[gid], sizeof(int), cudaMemcpyDeviceToHost, streams[gid]))
+    gpuErrchk(cudaEventRecord(end_events[gid], streams[gid]))
+
+  }
+
+  for (int gid = 0; gid < ngpus; gid++) {
+    gpuErrchk(cudaStreamSynchronize(streams[gid]));
+    float time;
+    cudaEventElapsedTime(&time, start_events[gid], end_events[gid]);
+    std::cout<<"Processing time of gpu "<<gid<<": "<<time/1000<<"s"<<std::endl;
+    gpuErrchk(cudaStreamDestroy(streams[gid]));
+  }
+  maximal_nodes_ = 0;
+  for (int i = 0; i < ngpus; i++) {
+    std::cout<<"gpu "<<i<<": "<<all_mb[i]<<std::endl;
+    maximal_nodes_ += all_mb[i];
+  }
+  exe_time_ = get_cur_time() - start_time_;
+}
+
