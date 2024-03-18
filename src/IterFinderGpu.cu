@@ -2619,9 +2619,8 @@ void IterFinderGpu10::Execute() {
     graph_gpu[i] = new CSRBiGraph();
     graph_gpu[i]->CopyToGpu(*graph_gpu_);
     host_processing_vertex[i] = i;
-    end_vertex[i] = std::min((i + 1) * verticesEachGpu, vsize) - 1;
     //std::cout<<i<<": "<<host_processing_vertex[i]<<" "<<end_vertex[i]<<std::endl;
-    //end_vertex[i] = vsize - 1;
+    end_vertex[i] = vsize - 1 - i;
     gpuErrchk(cudaMalloc((void **)&first_count[i], sizeof(unsigned long long)));
     gpuErrchk(cudaMalloc((void **)&local_mb[i], sizeof(unsigned long long)));
     gpuErrchk(cudaMalloc((void **)&local_processing_vertex[i], sizeof(int)));
@@ -2654,10 +2653,7 @@ void IterFinderGpu10::Execute() {
     gpuErrchk(cudaMemcpyAsync(local_processing_vertex[gid], &host_processing_vertex[gid], sizeof(int), cudaMemcpyHostToDevice, streams[gid]));
     gpuErrchk(cudaMemsetAsync(local_global_buffer[gid], 0, g_size * sizeof(int), streams[gid]));
     int start_vertex = 0;
-    if (gid > 0) {
-      start_vertex = end_vertex[gid - 1] + 1;
-    }
-    IterFinderKernel_9<<<MAX_BLOCKS, WARP_PER_BLOCK * 32, 0, streams[gid]>>>(
+    IterFinderKernel_10<<<MAX_BLOCKS, WARP_PER_BLOCK * 32, 0, streams[gid]>>>(
       *graph_gpu[gid], local_global_buffer[gid], local_mb[gid], local_processing_vertex[gid], start_vertex, 
       end_vertex[gid], global_large_worklist[gid],   
       global_count[gid], large_count[gid], tiny_count[gid], first_count[gid], isProcessed, ngpus);
