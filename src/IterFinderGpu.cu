@@ -48,7 +48,7 @@ __device__ void finder_pop_bitset(bitset_t &L, bitset_t* Q_C, int *exe_stack, in
   }
   #ifdef PRUNE_EN
   int start_id = 0;
-  if (level > 0) {
+  if (level > level_start) {
     start_id = exe_stack[level - 1];
   }
   for (int i = get_lane_id() + start_id; i < C_size && level > level_start; i += warpSize) {
@@ -1191,6 +1191,17 @@ __launch_bounds__(32 * WARP_PER_SM, 1) __global__
   if (threadIdx.x == 0) {
     local_tiny_worklist.Init(local_tiny_worklist_ptr, LOCAL_TINY_WORKLIST_SIZE);
   }
+  
+  #ifdef SINGLE_LOCAL
+  __shared__ TinyTask local_tiny_worklist_ptr_2[LOCAL_TINY_WORKLIST_SIZE];
+  for (int i = threadIdx.x; i < LOCAL_TINY_WORKLIST_SIZE; i += blockDim.x) {
+    local_tiny_worklist_ptr_2[i].Init();
+  }
+  __shared__ WorkList<TinyTask> local_tiny_worklist_2;
+  if (threadIdx.x == 0) {
+    local_tiny_worklist_2.Init(local_tiny_worklist_ptr_2, LOCAL_TINY_WORKLIST_SIZE);
+  }
+  #endif
 
   __threadfence_block();
   __syncthreads();
@@ -1209,13 +1220,21 @@ __launch_bounds__(32 * WARP_PER_SM, 1) __global__
       #ifdef SINGLE_LEVEL_QUEUE
       if (local_tiny_worklist.get_work_num() > 0) {
       #else 
+      #ifdef SINGLE_LOCAL
+      if (local_tiny_worklist_2.get_work_num() > 0) {
+      #else
       if (global_large_worklist->get_work_num() > 0) {
+      #endif
       #endif
         LargeTask lt;
         #ifdef SINGLE_LEVEL_QUEUE
         size_t get_num = local_tiny_worklist.get(lt);
-        #else 
+        #else
+        #ifdef SINGLE_LOCAL
+        size_t get_num = local_tiny_worklist_2.get(lt);
+        #else
         size_t get_num = global_large_worklist->get(lt);
+        #endif
         #endif
         if (get_num <= 0) continue;
 
@@ -1290,11 +1309,18 @@ __launch_bounds__(32 * WARP_PER_SM, 1) __global__
           IterFinderWithMultipleVertex(graph, warp_buffer, &local_tiny_worklist, 
                                      tt, local_mb_counter, large_count
                                      , non_maximal, bound_height, bound_size);
-        #else 
+        #else
+        #ifdef SINGLE_LOCAL 
+        if (local_tiny_worklist.get(tt)) {
+          IterFinderWithMultipleVertex(graph, warp_buffer, &local_tiny_worklist_2, 
+                                     tt, local_mb_counter, large_count
+                                     , non_maximal, bound_height, bound_size);
+        #else
         if (local_tiny_worklist.get(tt)) {
           IterFinderWithMultipleVertex(graph, warp_buffer, global_large_worklist, 
                                      tt, local_mb_counter, large_count
                                      , non_maximal, bound_height, bound_size);
+        #endif
         #endif
           ltc++;
           continue;
@@ -1315,9 +1341,15 @@ __launch_bounds__(32 * WARP_PER_SM, 1) __global__
                                      lt, local_mb_counter, large_count
                                      , non_maximal, bound_height, bound_size);
           #else
+          #ifdef SINGLE_LOCAL
+          IterFinderWithMultipleVertex(graph, warp_buffer, &local_tiny_worklist_2, 
+                                     lt, local_mb_counter, large_count,  
+                                     non_maximal, bound_height, bound_size);
+          #else
           IterFinderWithMultipleVertex(graph, warp_buffer, global_large_worklist, 
                                      lt, local_mb_counter, large_count,  
                                      non_maximal, bound_height, bound_size);
+          #endif
           #endif
 
           lgc ++;
