@@ -19,8 +19,8 @@
 
 #ifdef NN
 class bitset_t {
-  typedef uint32_t unit_type;
-  #define unit_size 32 
+  typedef uint8_t unit_type;
+  #define unit_size 8 
   #define bitset_size (NN + unit_size - 1) / unit_size
 private:
   unit_type _bits[bitset_size];

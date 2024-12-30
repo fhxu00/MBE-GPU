@@ -3,13 +3,16 @@
 
 #include "GpuUtil.cuh"
 #include <stdio.h>
+
 template<typename T>
 class WorkList {
 private:
 public:
   T *list_ptr;
   volatile size_t front, rear;
+  volatile int lock;
   size_t size;
+  int read_lock, write_lock;
   bool local;
   __host__ __device__ WorkList();
   __host__ __device__ void Init(T *, size_t, bool local_ = true);
@@ -27,6 +30,10 @@ public:
   __device__ void finish_read(const size_t &write_start, const size_t &get_num);
   __device__ void require_write(const size_t &require_size, size_t &write_start, size_t &push_num); 
   __device__ void finish_write(const size_t &write_start, const size_t &push_num);
+  __device__ void acquire_write_lock();
+  __device__ void release_write_lock();
+  __device__ void acquire_read_lock();
+  __device__ void release_read_lock();
 };
 
 template<typename T>
@@ -39,6 +46,8 @@ __host__ __device__ void WorkList<T>::Init(T *work_list_, size_t size_, bool loc
   front = rear = 0;
   size = size_;  
   local = local_;
+  read_lock = 0;
+  write_lock = 0;
 }
 
 template<typename T>
@@ -161,16 +170,55 @@ __device__ size_t WorkList<T>::get_works_from_global(WorkList<T> &global_worklis
 }*/
 
 template<typename T>
+__device__ void WorkList<T>::acquire_read_lock() {
+  if (get_lane_id() == 0) {
+  do {
+  }while (atomicCAS(&read_lock, 0, 1) == 1);
+  }
+} 
+
+template<typename T>
+__device__ void WorkList<T>::release_read_lock() {
+  if (get_lane_id() == 0) {
+  atomicExch(&read_lock, 0);
+  }
+} 
+
+template<typename T>
+__device__ void WorkList<T>::acquire_write_lock() {
+  if (get_lane_id() == 0) {
+  do {
+  }while (atomicCAS(&read_lock, 0, 1) == 1);
+  }
+}
+
+template<typename T>
+__device__ void WorkList<T>::release_write_lock() {
+  if (get_lane_id() == 0) {
+  atomicExch(&read_lock, 0);
+  }
+} 
+
+template<typename T>
 __device__ size_t WorkList<T>::push_works(int first_vertex, int *second_vertices, size_t size_) {
   size_t push_num;
   size_t write_start;
+  #ifdef DATA_COPY
+  acquire_write_lock();
+  #endif
   require_write(size_, write_start, push_num);
-  if (push_num <= 0) return 0;
+  if (push_num <= 0) {
+    release_write_lock();
+    return 0;
+  }
   for (size_t i = get_lane_id(); i < push_num; i += warpSize) {
     volatile T &item = list_ptr[(write_start + i) % size];
     while (item.isvalid());
     list_ptr[(write_start + i) % size].safeCopy(T(first_vertex, second_vertices[i]));
   }
+  #ifdef DATA_COPY
+  release_write_lock();
+  #endif
   return push_num;
 }
 
@@ -178,13 +226,22 @@ template<typename T>
 __device__ size_t WorkList<T>::push_works(T* ptr, size_t size_) {
   size_t push_num;
   size_t write_start;
+  #ifdef DATA_COPY
+  acquire_write_lock();
+  #endif
   require_write(size_, write_start, push_num);
-  if (push_num <= 0) return 0;
+  if (push_num <= 0) {
+    release_write_lock();
+    return 0;
+  }
   for (int i = get_lane_id(); i < push_num; i += warpSize) {
     volatile T &item = list_ptr[(write_start + i) % size];
     while (item.isvalid());
     list_ptr[(write_start + i) % size].safeCopy(ptr[i]);
   }
+  #ifdef DATA_COPY
+  release_write_lock();
+  #endif
   return push_num;
 }
 
@@ -192,13 +249,22 @@ template<typename T>
 __device__ size_t WorkList<T>::push_work(const T &work) {
   size_t idx, push_num;
  
+  #ifdef DATA_COPY
+  acquire_write_lock();
+  #endif
   require_write(1, idx, push_num);
-  if (push_num <= 0)return 0;
+  if (push_num <= 0) {
+    release_write_lock();
+    return 0;
+  }
   volatile T &item = list_ptr[idx]; 
   while(item.isvalid());
   if (get_lane_id() == 0) {
     list_ptr[idx].safeCopy(work);
   }
+  #ifdef DATA_COPY
+  release_write_lock();
+  #endif
   return 1;
 }
 
@@ -234,11 +300,15 @@ __device__ size_t WorkList<T>::get(T &work) {
 template<typename T>
 __device__ size_t WorkList<T>::get(T &work) {
   size_t idx, get_num; 
+  #ifdef DATA_COPY
+  acquire_read_lock();
+  #endif
   require_read(1, idx, get_num);
-
-  if(get_num <= 0) {
+  if (get_num <= 0) {
+    release_read_lock();
     return 0;
   }
+
   volatile T &item = list_ptr[idx];
   while (!item.isvalid()); 
   work = list_ptr[idx];
@@ -246,6 +316,9 @@ __device__ size_t WorkList<T>::get(T &work) {
   if (get_lane_id() == 0) {
     list_ptr[idx].invalidate();
   }
+  #ifdef DATA_COPY
+  release_read_lock();
+  #endif
   return 1;
 }
 
