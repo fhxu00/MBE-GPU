@@ -64,8 +64,8 @@ endif()
 math(EXPR NumOfSM "${NumOfSM} + 0")
 
 
-set(CUDA_NVCC_FLAGS -gencode arch=compute_80,code=sm_80;-O3;-w)
-# set(CUDA_NVCC_FLAGS -gencode ${CudaArch};-O3;-w)
+#set(CUDA_NVCC_FLAGS -gencode arch=compute_80,code=sm_80;-O3;-w)
+set(CUDA_NVCC_FLAGS -gencode ${CudaArch};-O3;-w)
 add_definitions(-DMAX_SM=${NumOfSM})
 
 message(STATUS "CUDA_NVCC_FLAGS set to: ${CUDA_NVCC_FLAGS}")
