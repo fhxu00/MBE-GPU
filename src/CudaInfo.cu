@@ -9,7 +9,7 @@ void printDeviceProperties(int deviceId, bool printArch, bool printSMCount) {
 
     if (printArch) {
         // Print the CMake compilation instructions
-        std::cout << "-gencode;arch=compute_" << prop.major << prop.minor << ",code=sm_" << prop.major << prop.minor;
+        std::cout << "arch=compute_" << prop.major << prop.minor << ",code=sm_" << prop.major << prop.minor;
     }
 
     if (printSMCount) {

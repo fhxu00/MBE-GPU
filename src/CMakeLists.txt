@@ -63,7 +63,9 @@ endif()
 
 math(EXPR NumOfSM "${NumOfSM} + 0")
 
-set(CUDA_NVCC_FLAGS ${CudaArch};-O3;-w)
+
+set(CUDA_NVCC_FLAGS -gencode arch=compute_80,code=sm_80;-O3;-w)
+# set(CUDA_NVCC_FLAGS -gencode ${CudaArch};-O3;-w)
 add_definitions(-DMAX_SM=${NumOfSM})
 
 message(STATUS "CUDA_NVCC_FLAGS set to: ${CUDA_NVCC_FLAGS}")
@@ -92,7 +94,7 @@ cuda_add_executable(
   GMBEv2  
   BicliqueFinder.cu BiGraph.cu main.cu Utility.cu IterFinderGpu.cu
 )
-target_compile_definitions(GMBEv2 PUBLIC -DNN=64)
+target_compile_definitions(GMBEv2 PUBLIC -DPRUNE_EN -DNN=64)
 target_link_libraries(GMBEv2 ${CUDA_cudadevrt_LIBRARY})
 target_link_libraries(GMBEv2 CUB::CUB)
 
