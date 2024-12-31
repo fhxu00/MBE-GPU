@@ -1,31 +1,73 @@
 cmake_minimum_required(VERSION 3.18)
 
-# Silence warnings about empty CUDA_ARCHITECTURES properties on example targets:
-if(CMAKE_VERSION VERSION_GREATER_EQUAL 3.18)
-	cmake_policy(SET CMP0104 OLD)
+if(POLICY CMP0146)
+	cmake_policy(SET CMP0146 OLD)
 endif()
+
 set(CMAKE_CXX_FLAGS "-O3")
 set(CUDA_SEPARABLE_COMPILATION TRUE)
 project(MBE_GPU)
 find_package(CUDA QUIET REQUIRED)
+
 add_subdirectory("third_party/cub" cub)
 
-IF (GPU_TYPE STREQUAL A100)
-  set(CUDA_NVCC_FLAGS -gencode arch=compute_80,code=sm_80;-O3;-w)
-  add_definitions(-DMAX_SM=108)
-ELSEIF (GPU_TYPE STREQUAL 2080TI)
-  set(CUDA_NVCC_FLAGS -gencode arch=compute_75,code=sm_75;-O3;-w)
-  add_definitions(-DMAX_SM=80)
-ELSEIF (GPU_TYPE STREQUAL V100)
-  set(CUDA_NVCC_FLAGS -gencode arch=compute_70,code=sm_70;-O3;-w)
-  add_definitions(-DMAX_SM=68)
-ELSEIF (GPU_TYPE STREQUAL 1080TI)
-  set(CUDA_NVCC_FLAGS -gencode arch=compute_61,code=sm_61;-O3;-w)
-  add_definitions(-DMAX_SM=28)
-ELSE()
-  message(FATAL_ERROR "Do not support the GPU_TYPE, you should revise the src/CMakeLists.txt to support the GPU_TYPE.")
-ENDIF()
+execute_process(
+  COMMAND ${CUDA_NVCC_EXECUTABLE} CudaInfo.cu -o CudaInfo
+  OUTPUT_VARIABLE Return_val
+  ERROR_VARIABLE Err
+  RESULT_VARIABLE Res
+  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+)
 
+if(NOT ${Res} EQUAL 0)
+  message(FATAL_ERROR "NVCC command output: ${CudaInfo_output} ${Err} ${Res}")
+endif()
+
+
+execute_process(
+  COMMAND ./CudaInfo -a
+  OUTPUT_VARIABLE CudaArch
+  ERROR_VARIABLE Err
+  RESULT_VARIABLE Res
+  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+)
+
+if(NOT ${Res} EQUAL 0)
+  message(FATAL_ERROR "Device architecture set failed: ${CudaArch} ${Err} ${Res}")
+endif()
+
+execute_process(
+  COMMAND ./CudaInfo -s
+  OUTPUT_VARIABLE NumOfSM
+  ERROR_VARIABLE Err
+  RESULT_VARIABLE Res
+  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+)
+
+if(NOT ${Res} EQUAL 0)
+  message(FATAL_ERROR "Number of SMs set failed: ${NumOfSM} ${Err} ${Res}")
+endif()
+
+execute_process(
+  COMMAND rm CudaInfo
+  OUTPUT_VARIABLE Out
+  ERROR_VARIABLE Err
+  RESULT_VARIABLE Res
+  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+)
+
+if(NOT ${Res} EQUAL 0)
+  message(FATAL_ERROR "remove CudaInfo failed: ${Out} ${Err} ${Res}")
+endif()
+
+
+math(EXPR NumOfSM "${NumOfSM} + 0")
+
+set(CUDA_NVCC_FLAGS ${CudaArch};-O3;-w)
+add_definitions(-DMAX_SM=${NumOfSM})
+
+message(STATUS "CUDA_NVCC_FLAGS set to: ${CUDA_NVCC_FLAGS}")
+message(STATUS "Number of SMs is detected as : ${NumOfSM} ")
 
 add_definitions(-DADV_UNION)
 add_compile_options(-w)
@@ -44,6 +86,15 @@ cuda_add_executable(
 target_compile_definitions(MBE_GPU PUBLIC -DPRUNE_EN)
 target_link_libraries(MBE_GPU ${CUDA_cudadevrt_LIBRARY})
 target_link_libraries(MBE_GPU CUB::CUB)
+
+project(GMBEv2)
+cuda_add_executable(
+  GMBEv2  
+  BicliqueFinder.cu BiGraph.cu main.cu Utility.cu IterFinderGpu.cu
+)
+target_compile_definitions(GMBEv2 PUBLIC -DNN=64)
+target_link_libraries(GMBEv2 ${CUDA_cudadevrt_LIBRARY})
+target_link_libraries(GMBEv2 CUB::CUB)
 
 project(MBE_GPU_NOPRUNE)
 cuda_add_executable(

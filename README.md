@@ -50,11 +50,10 @@ Using the following commands, one can easily compile the GMBE. The generated exe
 # Get source code
 git clone --recursive [repository_url]
 cd MBE-GPU
-
-# compiling with specific GPU type. If your GPU is A100, V100 and 2080TI, you can replace [GPU_TYPE] with the specific GPU type,
-# otherwise you should revise the file CMakeLists.txt under the directory src/ to support your GPU.  
-bash ./scripts/compile-GMBE.sh [GPU_TYPE]
+bash ./scripts/compile-GMBE.sh
 ```
+<!-- # compiling with specific GPU type. If your GPU is A100, V100 and 2080TI, you can replace [GPU_TYPE] with the specific GPU type, -->
+<!-- # otherwise you should revise the file CMakeLists.txt under the directory src/ to support your GPU.   -->
 You can refer to the [QA-1](#QA) about how to support your GPUs.
 
 ## Dataset preparing
@@ -83,22 +82,22 @@ You can run GMBE with the following command-line options.
 We provide the scripts to generate the experimental results of Figure 6-13 and Table 2 in the directory `scripts/`. You can execute the scripts as following.
 ```
 # Running on a machine with a 96-core CPU and a GPU
-bash ./scripts/gen-fig-6.sh [GPU_TYPE]
+bash ./scripts/gen-fig-6.sh
 
 # Running on any machine
 bash ./scripts/gen-fig-7.sh
 
 # Running on a machine with a GPU
-bash ./scripts/gen-fig-8.sh [GPU_TYPE]
+bash ./scripts/gen-fig-8.sh 
 
 # Running on a machine with a GPU
-bash ./scripts/gen-fig-9.sh [GPU_TYPE]
+bash ./scripts/gen-fig-9.sh 
 
 # Running on a machine with a GPU
-bash ./scripts/gen-fig-10.sh [GPU_TYPE]
+bash ./scripts/gen-fig-10.sh 
 
 # Running on a machine with a GPU
-bash ./scripts/gen-fig-11.sh [GPU_TYPE]
+bash ./scripts/gen-fig-11.sh 
 
 # Running on three machine with A100, V100 and 2080Ti respectively. 
 # It is required to collect all the results in ./fig/fig-12/[GPU_TYPE].data 
@@ -107,7 +106,7 @@ bash ./scripts/gen-fig-11.sh [GPU_TYPE]
 bash ./scripts/gen-fig-12.sh [GPU_TYPE]
 
 # Running on a machine with 8 GPUs
-bash ./scripts/gen-fig-13.sh [GPU_TYPE]
+bash ./scripts/gen-fig-13.sh 
 ```
 We provide the script to generate figures in the directory `fig/` with the results generated in above. You can execute the script as following.
 ```
@@ -119,7 +118,7 @@ Then you will find the figures under the directory `fig/`.
 To generate the experimental result of Table 2, you can execute the script as following.
 ```
 # Running on a machine with a GPU
-bash ./scripts/gen-table-2.sh [GPU_TYPE]
+bash ./scripts/gen-table-2.sh 
 ```
 Then you will find the experimental result under the directory `table/`.
 # QA
