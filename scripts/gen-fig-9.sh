@@ -5,19 +5,12 @@ then
   mkdir ./bin
 fi
 
-if [ $# -eq 0 ]
-then 
-  gpu_type=V100
-else 
-  gpu_type=$1
-fi
-
 if [ ! -f "./bin/MBE_GPU" ]  
 then
   cd ./src || exit
   mkdir build
   cd build || exit
-  cmake .. -DGPU_TYPE=${gpu_type}
+  cmake .. 
   make
   mv MBE_GPU* ../../bin/
   cd ../../

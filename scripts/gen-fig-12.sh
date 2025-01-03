@@ -16,7 +16,7 @@ then
   cd ./src || exit
   mkdir build
   cd build || exit
-  cmake .. -DGPU_TYPE=${gpu_type}
+  cmake .. 
   make
   mv MBE_GPU* ../../bin/
   cd ../../

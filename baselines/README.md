@@ -28,4 +28,8 @@ You can run ooMBEA with the following command.
 ```
 ./bin/mbbp [dataset_path]
 ```
+You can run MBET with the following command.
+```
+./bin/MBET [dataset_path]
+```
 PARMBE and ooMBEA only accept the graph files stored as edge pairs, which are stored with the extention `.graph` under the directory `datasets\` after you have completed the datasets preparation.

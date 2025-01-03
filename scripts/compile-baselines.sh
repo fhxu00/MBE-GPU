@@ -51,3 +51,22 @@ then
   cd ../../../
 fi
 
+
+if [ ! -f "./bin/MBET" ]
+then
+  cd ./baselines || exit
+  if [ ! -d "./MBET" ]
+  then
+    mkdir MBET
+    unzip -q MBET.zip -d MBET
+  fi
+  cd MBET || exit
+  mkdir build
+  cd build 
+  cmake ..
+  make MBET
+  make MBETM
+  mv MBET ../../../bin/
+  mv MBETM ../../../bin/
+  cd ../../../
+fi

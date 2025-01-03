@@ -145,13 +145,6 @@ class IterFinderGpu2 : public IterFinderGpu {
   void Execute();
 };
 
-class IterFinderGpu3 : public IterFinderGpu {
- public:
-  IterFinderGpu3() = delete;
-  IterFinderGpu3(CSRBiGraph *graph_in);
-  ~IterFinderGpu3();
-  void Execute();
-};
 
 class IterFinderGpu4 : public IterFinderGpu {
  public:

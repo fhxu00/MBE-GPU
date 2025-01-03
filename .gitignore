@@ -3,6 +3,7 @@
 baselines/cohesive_subgraph_bipartite
 baselines/parallel-mbe
 baselines/MBE
+baselines/MBET
 bin
 datasets
 scripts/progress.txt
@@ -19,3 +20,6 @@ install_manifest.txt
 compile_commands.json
 CTestTestfile.cmake
 _deps
+
+.vscode
+log.txt
