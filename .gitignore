@@ -4,6 +4,7 @@ baselines/cohesive_subgraph_bipartite
 baselines/parallel-mbe
 baselines/MBE
 baselines/MBET
+baselines/cuMBE
 bin
 datasets
 scripts/progress.txt

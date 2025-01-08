@@ -70,3 +70,16 @@ then
   mv MBETM ../../../bin/
   cd ../../../
 fi
+
+if [ ! -f "./bin/cuMBE" ]
+then
+  cd ./baselines || exit
+  if [ ! -d "./cuMBE" ]
+  then
+    unzip -q cuMBE.zip 
+  fi
+  cd cuMBE || exit
+  make
+  mv bin/cuMBE ../../bin/cuMBE
+  cd ../../../
+fi
