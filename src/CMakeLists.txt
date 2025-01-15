@@ -75,7 +75,7 @@ add_definitions(-DADV_UNION)
 add_compile_options(-w)
 
 # add_definitions(-DWARP_PER_BLOCK=16)
-
+# add_definitions(-DPRINT_TIMELY)
 add_definitions(-DMAX_2_H_DEGREE_BOUND=0x40000)
 add_definitions(-DMAX_DEGREE_BOUND=0x25000)
 add_definitions(-DBLOCKS_PER_SM=1)

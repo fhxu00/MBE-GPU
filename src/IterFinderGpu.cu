@@ -11,26 +11,35 @@ extern bool printSMTime;
 #define SHARED_CACHE_SIZE 0x1000
 #define BUFFER_PER_WARP (2 * MAX_DEGREE_BOUND + 2 * MAX_2_H_DEGREE_BOUND)
 #ifdef NN
-__device__ bool finder_push_bitset(bitset_t &L, bitset_t *Q_C, int *exe_stack, int &cur_cid, int &level) {
+__device__ bool finder_push_bitset(bitset_t &L, bitset_t *Q_C, int *exe_stack, int &cur_cid, int &level)
+{
   bitset_t L_prime = L & Q_C[cur_cid];
-  if (L_prime.count() == 0) return false;
+  if (L_prime.count() == 0)
+    return false;
   bool is_maximal = true;
-  for (int i = get_lane_id(); i < cur_cid && is_maximal; i += warpSize) {
+  for (int i = get_lane_id(); i < cur_cid && is_maximal; i += warpSize)
+  {
     bitset_t bs = L_prime & Q_C[i];
-    if (bs == L_prime && (L & Q_C[i]) != L) {
+    if (bs == L_prime && (L & Q_C[i]) != L)
+    {
       is_maximal = false;
     }
   }
   is_maximal = __all_sync(FULL_MASK, is_maximal);
-  if (is_maximal) {
-    if (get_lane_id() == 0) {
+  if (is_maximal)
+  {
+    if (get_lane_id() == 0)
+    {
       exe_stack[level - 1] = cur_cid;
       exe_stack[level] = cur_cid + 1;
     }
     level++;
     L = L_prime;
-  } else {
-    if (get_lane_id() == 0) {
+  }
+  else
+  {
+    if (get_lane_id() == 0)
+    {
       exe_stack[level - 1] = cur_cid + 1;
     }
   }
@@ -38,73 +47,94 @@ __device__ bool finder_push_bitset(bitset_t &L, bitset_t *Q_C, int *exe_stack, i
   return is_maximal;
 }
 
-__device__ void finder_pop_bitset(bitset_t &L, bitset_t* Q_C, int *exe_stack, int &level, bitset_t &L_stack, int level_start, int *C_level_neighbors, int C_size) {
+__device__ void finder_pop_bitset(bitset_t &L, bitset_t *Q_C, int *exe_stack, int &level, bitset_t &L_stack, int level_start, int *C_level_neighbors, int C_size)
+{
   int cur_cid = exe_stack[level - 1];
   bitset_t cur_bs = L_stack;
   L_stack = L;
   level--;
-  for (int i = level_start; i < level - 1; i++) {
+  for (int i = level_start; i < level - 1; i++)
+  {
     L_stack &= Q_C[exe_stack[i]];
   }
-  #ifdef PRUNE_EN
+#ifdef PRUNE_EN
   int start_id = 0;
-  if (level > level_start) {
+  if (level > level_start)
+  {
     start_id = exe_stack[level - 1];
   }
-  for (int i = get_lane_id() + start_id; i < C_size && level > level_start; i += warpSize) {
+  for (int i = get_lane_id() + start_id; i < C_size && level > level_start; i += warpSize)
+  {
     int c_level_neighbors = C_level_neighbors[i];
     bitset_t bs = L_stack & Q_C[i];
     int c_level = c_level_neighbors >> 16;
-    if (c_level < level) continue;
+    if (c_level < level)
+      continue;
     int prefix = 0x7fff;
-    if (i > cur_cid && (bs & cur_bs) == bs) {
+    if (i > cur_cid && (bs & cur_bs) == bs)
+    {
       prefix = level - 1;
     }
     C_level_neighbors[i] = (c_level_neighbors & 0xffff) | (prefix << 16);
   }
-  #endif
+#endif
   __syncwarp();
-  if (get_lane_id() == 0 && level > level_start) {
+  if (get_lane_id() == 0 && level > level_start)
+  {
     exe_stack[level - 1] = exe_stack[level - 1] + 1;
   }
 }
 
-__device__ void IterProcess_bitset(bitset_t &L, bitset_t *Q_C, int &Q_C_size, int c_start, int &local_mb_counter, int *exe_stack, int *C_level_neighbors, int& level_start) {
+__device__ void IterProcess_bitset(bitset_t &L, bitset_t *Q_C, int &Q_C_size, int c_start, int &local_mb_counter, int *exe_stack, int *C_level_neighbors, int &level_start)
+{
   int level = level_start + 1;
-  if (get_lane_id() == 0) exe_stack[level_start] = c_start;
+  if (get_lane_id() == 0)
+    exe_stack[level_start] = c_start;
   bool is_maximal;
   bitset_t L_stack = L;
-  while (level != level_start) {
+  while (level != level_start)
+  {
     __syncwarp();
     int cur_cid = -1;
     int last_cid = exe_stack[level - 1];
-    for (int i = last_cid; i < Q_C_size; i++) {
+    for (int i = last_cid; i < Q_C_size; i++)
+    {
       bitset_t bs = L_stack & Q_C[i];
       int c_level_neighbors = C_level_neighbors[i];
-      if (bs != L_stack && bs.count() != 0 && (c_level_neighbors >> 16) > level - 1) {
+      if (bs != L_stack && bs.count() != 0 && (c_level_neighbors >> 16) > level - 1)
+      {
         cur_cid = i;
         break;
       }
     }
-    if (cur_cid != -1) {
+    if (cur_cid != -1)
+    {
       is_maximal = finder_push_bitset(L_stack, Q_C, exe_stack, cur_cid, level);
-      if (is_maximal) {
-        local_mb_counter++;  
-      } else {
-        #ifdef PRUNE_EN
+      if (is_maximal)
+      {
+        local_mb_counter++;
+      }
+      else
+      {
+#ifdef PRUNE_EN
         bitset_t cur_bs = L_stack & Q_C[cur_cid];
-        for (int i = get_lane_id() + cur_cid + 1; i < Q_C_size; i += warpSize) {
+        for (int i = get_lane_id() + cur_cid + 1; i < Q_C_size; i += warpSize)
+        {
           int c_level_neighbors = C_level_neighbors[i];
           bitset_t bs = L_stack & Q_C[i];
           int c_level = c_level_neighbors >> 16;
-          if (c_level < level) continue;
-          if ((bs & cur_bs) == bs) {
+          if (c_level < level)
+            continue;
+          if ((bs & cur_bs) == bs)
+          {
             C_level_neighbors[i] = (c_level_neighbors & 0xffff) | ((level - 1) << 16);
           }
         }
-        #endif
+#endif
       }
-    } else {
+    }
+    else
+    {
       finder_pop_bitset(L, Q_C, exe_stack, level, L_stack, level_start, C_level_neighbors, Q_C_size);
     }
   }
@@ -113,20 +143,24 @@ __device__ void IterProcess_bitset(bitset_t &L, bitset_t *Q_C, int &Q_C_size, in
 __device__ void bitset_adapter(CSRBiGraph &graph, int cur_cid,
                                int *L_vertices, int *L_level,
                                int L_size, int *C_vertices,
-                               int *C_level_neighbors, int C_size, 
+                               int *C_level_neighbors, int C_size,
                                int *exe_stack, int &local_mb_counter,
-                               bitset_t *bitsets_ptr, int level) {
+                               bitset_t *bitsets_ptr, int level)
+{
   int cur_l_size = 0;
   int warpId = threadIdx.x / 32;
   __shared__ int L_curs[NN * WARP_PER_SM];
-  int *L_cur = L_curs + NN * warpId; 
-  for (int i = get_lane_id(); i - get_lane_id() < L_size; i += warpSize) {
+  int *L_cur = L_curs + NN * warpId;
+  for (int i = get_lane_id(); i - get_lane_id() < L_size; i += warpSize)
+  {
     unsigned int mask = __ballot_sync(FULL_MASK, i < L_size);
     int pos_inc = 0;
-    if (i < L_size) {
-      bool is_cur_l = L_level[i] == level; 
+    if (i < L_size)
+    {
+      bool is_cur_l = L_level[i] == level;
       unsigned int cur_l_mask = __ballot_sync(mask, is_cur_l);
-      if (is_cur_l) {
+      if (is_cur_l)
+      {
         int offset = count_bit(cur_l_mask >> get_lane_id()) - 1;
         int pos = cur_l_size + offset;
         L_cur[pos] = L_vertices[i];
@@ -141,22 +175,26 @@ __device__ void bitset_adapter(CSRBiGraph &graph, int cur_cid,
   L.setbits(cur_l_size);
   int q_c_size = 0;
   int c_start = C_size;
-  for (int i = get_lane_id(); i - get_lane_id() < C_size; i += warpSize) {
+  for (int i = get_lane_id(); i - get_lane_id() < C_size; i += warpSize)
+  {
     unsigned int mask = __ballot_sync(FULL_MASK, i < C_size);
     int pos_inc = 0;
-    if (i < C_size) {
+    if (i < C_size)
+    {
       int l_connected = C_level_neighbors[i] & 0xffff;
       bitsets_ptr[i].clear();
-        for (int j = 0; j < cur_l_size; j++) {
-          int u0 = L_cur[j];
-          int *base_0 = graph.rev_column_indices + graph.rev_row_offset[u0];
-          int size_0 = graph.rev_row_offset[u0 + 1] - graph.rev_row_offset[u0];
-          if (binary_search(C_vertices[i], base_0, 0, size_0 - 1) != -1) {
-            bitsets_ptr[i].set(j);
-          }
+      for (int j = 0; j < cur_l_size; j++)
+      {
+        int u0 = L_cur[j];
+        int *base_0 = graph.rev_column_indices + graph.rev_row_offset[u0];
+        int size_0 = graph.rev_row_offset[u0 + 1] - graph.rev_row_offset[u0];
+        if (binary_search(C_vertices[i], base_0, 0, size_0 - 1) != -1)
+        {
+          bitsets_ptr[i].set(j);
         }
+      }
 
-      //bool is_q_c = l_connected > 0 && l_connected < cur_l_size; 
+      //bool is_q_c = l_connected > 0 && l_connected < cur_l_size;
       //unsigned int q_c_mask = __ballot_sync(mask, is_q_c);
       //int n = count_bit(q_c_mask);
 
@@ -196,67 +234,86 @@ __device__ __forceinline__ void IterProcess(CSRBiGraph &graph, int *L_vertices,
                                             int *C_vertices,
                                             int *C_level_neighbors, int C_size,
                                             int *exe_stack, int first_id,
-                                            int &local_mb_counter, 
-                                            #ifdef NN
+                                            int &local_mb_counter,
+#ifdef NN
                                             bitset_t *bitsets_ptr,
-                                            #endif
-                                            unsigned long long *non_maximal = nullptr) {
+#endif
+                                            unsigned long long *non_maximal = nullptr)
+{
   int level = 1;
-  if (get_lane_id() == 0) exe_stack[0] = first_id;
+  if (get_lane_id() == 0)
+    exe_stack[0] = first_id;
   bool is_maximal;
 
-  while (level != 0) {  // stack is not empty
+  while (level != 0)
+  { // stack is not empty
 
     int cur_cid = -1;
     int last_cid = exe_stack[level - 1];
-    for (int i = last_cid; i < C_size; i++) {
+    for (int i = last_cid; i < C_size; i++)
+    {
       int c_level_neighbors = C_level_neighbors[i];
       if ((c_level_neighbors >> 16) > level - 1 &&
-          (c_level_neighbors & 0xffff)) {
+          (c_level_neighbors & 0xffff))
+      {
         cur_cid = i;
         break;
       }
     }
 
-    if (cur_cid != -1) {  // next candidate id is found
+    if (cur_cid != -1)
+    { // next candidate id is found
       int cur_l_size = 0;
       is_maximal = finder_push(graph, cur_cid, level, L_vertices, L_level,
                                L_size, C_vertices, C_level_neighbors, C_size, cur_l_size);
 
-      if (is_maximal) {
-        #ifdef NN
-        if (cur_l_size <= NN) {
+      if (is_maximal)
+      {
+#ifdef NN
+        if (cur_l_size <= NN)
+        {
           bitset_adapter(graph, cur_cid, L_vertices, L_level, L_size, C_vertices, C_level_neighbors, C_size, exe_stack, local_mb_counter, bitsets_ptr, level);
           is_maximal = false;
         }
-        #endif
+#endif
         local_mb_counter++;
       }
-      else {
-        if (get_lane_id() == 0 && non_maximal != nullptr) {
+      else
+      {
+        if (get_lane_id() == 0 && non_maximal != nullptr)
+        {
           atomicAdd(non_maximal, 1);
         }
       }
-      if (is_maximal && (C_level_neighbors[cur_cid] & 0xffff) > 1) {
-        if (get_lane_id() == 0) {
+      if (is_maximal && (C_level_neighbors[cur_cid] & 0xffff) > 1)
+      {
+        if (get_lane_id() == 0)
+        {
           exe_stack[level - 1] = cur_cid;
           exe_stack[level] = cur_cid + 1;
         }
         level++;
-      } else {
-        if (get_lane_id() == 0) exe_stack[level - 1] = cur_cid + 1;
+      }
+      else
+      {
+        if (get_lane_id() == 0)
+          exe_stack[level - 1] = cur_cid + 1;
 
         finder_pop(graph, cur_cid, level, L_vertices, L_level, L_size,
                    C_vertices, C_level_neighbors, C_size);
       }
-    } else {  // not found
+    }
+    else
+    { // not found
       level--;
 
-      if (level > 0) {
+      if (level > 0)
+      {
         cur_cid = exe_stack[level - 1];
         finder_pop(graph, cur_cid, level, L_vertices, L_level, L_size,
                    C_vertices, C_level_neighbors, C_size);
-        if (get_lane_id() == 0) exe_stack[level - 1] = cur_cid + 1;
+        if (get_lane_id() == 0)
+          exe_stack[level - 1] = cur_cid + 1;
       }
     }
   }
@@ -265,8 +322,8 @@ __device__ __forceinline__ void IterProcess(CSRBiGraph &graph, int *L_vertices,
 __launch_bounds__(32 * WARP_PER_SM, 1) __global__
     void IterFinderKernel(CSRBiGraph graph, int *global_buffer,
                           unsigned long long *maximal_bicliques, int *processing_vertex,
-                          double clock_rate = 0
-                          ) {
+                          double clock_rate = 0)
+{
   auto sm_start = clock64();
   int warp_id = (blockIdx.x * blockDim.x + threadIdx.x) / warpSize;
   // int num_warps = WARP_PER_BLOCK * gridDim.x;
@@ -284,38 +341,46 @@ __launch_bounds__(32 * WARP_PER_SM, 1) __global__
   int *C_vertices = warp_buffer + 2 * MAX_DEGREE_BOUND;
   int *C_level_neighbors =
       warp_buffer + 2 * MAX_DEGREE_BOUND + MAX_2_H_DEGREE_BOUND;
-  #ifdef NN
-  bitset_t *bitsets_ptr = 
-    (bitset_t *)(C_level_neighbors + MAX_2_H_DEGREE_BOUND);
-  #endif
+#ifdef NN
+  bitset_t *bitsets_ptr =
+      (bitset_t *)(C_level_neighbors + MAX_2_H_DEGREE_BOUND);
+#endif
   int C_size;
 
   int cur_vertex;
 
-  while (true) {
+  while (true)
+  {
     if (get_lane_id() == 0)
       cur_vertex = graph.V_size - 1 - atomicAdd(processing_vertex, 1);
     cur_vertex = get_value_from_lane_x(cur_vertex);
-    if (cur_vertex < 0) break;
+    if (cur_vertex < 0)
+      break;
 
     // step 1: initialize L set
     L_size = graph.row_offset[cur_vertex + 1] - graph.row_offset[cur_vertex];
     L_vertices = graph.column_indices + graph.row_offset[cur_vertex];
     if (L_size > MAX_DEGREE_BOUND && get_lane_id() == 0)
       printf("L_size is out of memory %d/%d\n", L_size, MAX_DEGREE_BOUND);
-    if (L_size == 1) {
-      if (get_lane_id() == 0) {
+    if (L_size == 1)
+    {
+      if (get_lane_id() == 0)
+      {
         int u0 = L_vertices[0];
         int *base_0 = graph.rev_column_indices + graph.rev_row_offset[u0];
-        if (base_0[0] == cur_vertex) local_mb_counter++;
+        if (base_0[0] == cur_vertex)
+          local_mb_counter++;
       }
-    } else {
+    }
+    else
+    {
       // step 2: initialize R set and maximality check
       int *R_vertices = exe_stack;
       int R_size = NeighborsIntersectL(graph, L_vertices, L_size, C_vertices,
                                        R_vertices);
 
-      if (R_vertices[0] == cur_vertex) {
+      if (R_vertices[0] == cur_vertex)
+      {
         local_mb_counter++;
 
         // step 3: initialize C set
@@ -327,26 +392,33 @@ __launch_bounds__(32 * WARP_PER_SM, 1) __global__
           printf("C_size is out of memory %d/%d\n", C_size,
                  MAX_2_H_DEGREE_BOUND);
 
-        if (C_size > 0 && C_vertices[C_size - 1] > cur_vertex) {
+        if (C_size > 0 && C_vertices[C_size - 1] > cur_vertex)
+        {
           int first_level_cand_id = C_size - 1;
-          for (int i = get_lane_id(); i < C_size; i += warpSize) {
-            if (C_vertices[i] > cur_vertex) {
+          for (int i = get_lane_id(); i < C_size; i += warpSize)
+          {
+            if (C_vertices[i] > cur_vertex)
+            {
               first_level_cand_id = i;
               break;
             }
           }
           first_level_cand_id = warp_min(first_level_cand_id);
-          if (get_lane_id() == 0) exe_stack[0] = first_level_cand_id;
+          if (get_lane_id() == 0)
+            exe_stack[0] = first_level_cand_id;
 
-          for (int i = get_lane_id(); i < L_size; i += warpSize) {
+          for (int i = get_lane_id(); i < L_size; i += warpSize)
+          {
             L_level[i] = 0;
           }
 
-          for (int i = get_lane_id(); i < C_size; i += warpSize) {
+          for (int i = get_lane_id(); i < C_size; i += warpSize)
+          {
             C_level_neighbors[i] = 0x7fff0000;
           }
 
-          for (int i = 0; i < L_size; i++) {
+          for (int i = 0; i < L_size; i++)
+          {
             int u0 = L_vertices[i];
             int *base_0 = graph.rev_column_indices + graph.rev_row_offset[u0];
             int size_0 =
@@ -359,10 +431,11 @@ __launch_bounds__(32 * WARP_PER_SM, 1) __global__
           IterProcess(graph, L_vertices, L_level, L_size, C_vertices,
                       C_level_neighbors, C_size, exe_stack, first_level_cand_id,
                       local_mb_counter
-                      #ifdef NN
-                      , bitsets_ptr
-                      #endif
-                      );
+#ifdef NN
+                      ,
+                      bitsets_ptr
+#endif
+          );
         }
       }
     }
@@ -372,24 +445,28 @@ __launch_bounds__(32 * WARP_PER_SM, 1) __global__
   // if (get_lane_id() == 0) printf("%4d\t", warp_id);
   __syncthreads();
   unsigned long long sm_end = clock64();
-  if (threadIdx.x == 0 && clock_rate != 0) {
+  if (threadIdx.x == 0 && clock_rate != 0)
+  {
     printf("SM exit: %lf\n", (sm_end - sm_start) / 1000.0 / clock_rate);
   }
-  if (threadIdx.x == 0) {
+  if (threadIdx.x == 0)
+  {
     //printf("sm end. now maximal_bicliques is %d\n", *maximal_bicliques);
   }
 }
 
-void IterFinderGpu::SyncMB() {
+void IterFinderGpu::SyncMB()
+{
   printf("start to sync\n");
   cudaStream_t stream;
   gpuErrchk(cudaMemcpyAsync(&maximal_nodes_, dev_mb_, sizeof(int),
-                       cudaMemcpyDeviceToHost, stream));
+                            cudaMemcpyDeviceToHost, stream));
   exe_time_ = get_cur_time() - start_time_;
   printf("copy success, mb: %d\n", maximal_nodes_);
 }
 
-IterFinderGpu::IterFinderGpu(CSRBiGraph *graph_in) : BicliqueFinder(graph_in) {
+IterFinderGpu::IterFinderGpu(CSRBiGraph *graph_in) : BicliqueFinder(graph_in)
+{
   graph_gpu_ = new CSRBiGraph();
   gpuErrchk(cudaSetDevice(0));
   graph_gpu_->CopyToGpu(*graph_in);
@@ -404,14 +481,18 @@ IterFinderGpu::IterFinderGpu(CSRBiGraph *graph_in) : BicliqueFinder(graph_in) {
 
   cudaDeviceProp dev;
   cudaGetDeviceProperties(&dev, 0);
-  if (printSMTime) {
+  if (printSMTime)
+  {
     clock_rate = dev.clockRate;
-  } else {
+  }
+  else
+  {
     clock_rate = 0;
   }
 }
 
-IterFinderGpu::~IterFinderGpu() {
+IterFinderGpu::~IterFinderGpu()
+{
   graph_gpu_->Reset();
   delete graph_gpu_;
   gpuErrchk(cudaFree(dev_global_buffer_));
@@ -419,7 +500,8 @@ IterFinderGpu::~IterFinderGpu() {
   gpuErrchk(cudaFree(dev_processing_vertex_));
 }
 
-void IterFinderGpu::Execute() {
+void IterFinderGpu::Execute()
+{
   start_time_ = get_cur_time();
   IterFinderKernel<<<MAX_BLOCKS, WARP_PER_BLOCK * 32>>>(
       *graph_gpu_, dev_global_buffer_, dev_mb_, dev_processing_vertex_, clock_rate);
@@ -430,7 +512,7 @@ void IterFinderGpu::Execute() {
   exe_time_ = get_cur_time() - start_time_;
 }
 
-#define SD_BUFFER_PER_BLOCK (MAX_2_H_DEGREE_BOUND)  // for common C vertices
+#define SD_BUFFER_PER_BLOCK (MAX_2_H_DEGREE_BOUND) // for common C vertices
 #define BUFFER_PER_WARP_2 (3 * MAX_DEGREE_BOUND + 3 * MAX_2_H_DEGREE_BOUND)
 #define BUFFER_PER_BLOCK_2 \
   (SD_BUFFER_PER_BLOCK + BUFFER_PER_WARP_2 * WARP_PER_BLOCK)
@@ -439,8 +521,8 @@ void IterFinderGpu::Execute() {
 __launch_bounds__(32 * WARP_PER_SM, 1) __global__
     void IterFinderKernel_2(CSRBiGraph graph, int *global_buffer,
                             unsigned long long *maximal_bicliques, int *processing_vertex,
-                            double clock_rate = 0
-                            ) {
+                            double clock_rate = 0)
+{
   auto sm_start = clock64();
   int warp_id = (blockIdx.x * blockDim.x + threadIdx.x) / warpSize;
   int *warp_buffer = global_buffer + BUFFER_PER_WARP_2 * warp_id +
@@ -461,23 +543,27 @@ __launch_bounds__(32 * WARP_PER_SM, 1) __global__
   int *C_vertices = warp_buffer + 3 * MAX_DEGREE_BOUND;
   int *C_level_neighbors =
       warp_buffer + 3 * MAX_DEGREE_BOUND + MAX_2_H_DEGREE_BOUND;
-  #ifdef NN
-  bitset_t *bitsets_ptr = 
-    (bitset_t *)(C_level_neighbors + MAX_2_H_DEGREE_BOUND);
-  #endif
+#ifdef NN
+  bitset_t *bitsets_ptr =
+      (bitset_t *)(C_level_neighbors + MAX_2_H_DEGREE_BOUND);
+#endif
   int C_size;
   __shared__ int first_vertex;
   int second_id;
   int second_vertex;
 
-  while (true) {
-    if (threadIdx.x == 0) {
+  while (true)
+  {
+    if (threadIdx.x == 0)
+    {
       first_vertex = graph.V_size - 1 - atomicAdd(processing_vertex, 1);
       C_size_sd = 0;
     }
-    if (threadIdx.x < 32) {
+    if (threadIdx.x < 32)
+    {
       __syncwarp();
-      if(first_vertex >= 0){
+      if (first_vertex >= 0)
+      {
         // init L
         L_size =
             graph.row_offset[first_vertex + 1] - graph.row_offset[first_vertex];
@@ -486,38 +572,48 @@ __launch_bounds__(32 * WARP_PER_SM, 1) __global__
         if (L_size > MAX_DEGREE_BOUND && get_lane_id() == 0)
           printf("L_size is out of memory %d/%d\n", L_size, MAX_DEGREE_BOUND);
 
-        if (L_size == 1) {
-          if (get_lane_id() == 0) {
+        if (L_size == 1)
+        {
+          if (get_lane_id() == 0)
+          {
             int u0 = L_vertices_sd[0];
             int *base_0 = graph.rev_column_indices + graph.rev_row_offset[u0];
-            if (base_0[0] == first_vertex) local_mb_counter++;
+            if (base_0[0] == first_vertex)
+              local_mb_counter++;
           }
-        } else {
+        }
+        else
+        {
           // init R
           int *R_vertices = exe_stack;
           int R_size = NeighborsIntersectL(graph, L_vertices_sd, L_size,
-                                          C_vertices_sd, R_vertices);
-          if (R_vertices[0] == first_vertex) {
+                                           C_vertices_sd, R_vertices);
+          if (R_vertices[0] == first_vertex)
+          {
             local_mb_counter++;
             // init C
 
             C_size = NeighborsUnionL(graph, L_vertices_sd, L_size,
-                                    C_level_neighbors, C_vertices_sd);
+                                     C_level_neighbors, C_vertices_sd);
             C_size = seq_diff_warp(C_vertices_sd, C_size, R_vertices, R_size);
 
             if (C_size > MAX_2_H_DEGREE_BOUND && get_lane_id() == 0)
               printf("C_size is out of memory %d/%d\n", C_size,
-                    MAX_2_H_DEGREE_BOUND);
-            if (C_size > 0 && C_vertices_sd[C_size - 1] > first_vertex) {
+                     MAX_2_H_DEGREE_BOUND);
+            if (C_size > 0 && C_vertices_sd[C_size - 1] > first_vertex)
+            {
               int scanner_id = C_size - 1;
-              for (int i = get_lane_id(); i < C_size; i += warpSize) {
-                if (C_vertices_sd[i] > first_vertex) {
+              for (int i = get_lane_id(); i < C_size; i += warpSize)
+              {
+                if (C_vertices_sd[i] > first_vertex)
+                {
                   scanner_id = i;
                   break;
                 }
               }
               scanner_id = warp_min(scanner_id);
-              if (get_lane_id() == 0) {
+              if (get_lane_id() == 0)
+              {
                 C_size_sd = C_size;
                 C_scanner_id_sd = scanner_id;
               }
@@ -528,15 +624,19 @@ __launch_bounds__(32 * WARP_PER_SM, 1) __global__
     }
 
     __syncthreads();
-    if (first_vertex < 0) break;
-    if (C_size_sd == 0) continue;
+    if (first_vertex < 0)
+      break;
+    if (C_size_sd == 0)
+      continue;
 
-    while (true) {
-      if (get_lane_id() == 0) second_id = atomicAdd(&C_scanner_id_sd, 1);
+    while (true)
+    {
+      if (get_lane_id() == 0)
+        second_id = atomicAdd(&C_scanner_id_sd, 1);
       second_id = get_value_from_lane_x(second_id);
-      if (second_id >= C_size_sd) break;
+      if (second_id >= C_size_sd)
+        break;
       second_vertex = C_vertices_sd[second_id];
-  
 
       // gen L
       int *base_0, size_0, *base_1, size_1;
@@ -549,11 +649,13 @@ __launch_bounds__(32 * WARP_PER_SM, 1) __global__
       L_size = seq_intersect_warp(base_0, size_0, base_1, size_1, L_vertices);
 
       // gen C
-      for (int i = get_lane_id(); i < C_size_sd; i += warpSize) {
+      for (int i = get_lane_id(); i < C_size_sd; i += warpSize)
+      {
         C_level_neighbors[i] = 0x7fff0000;
       }
 
-      for (int i = 0; i < L_size; i++) {
+      for (int i = 0; i < L_size; i++)
+      {
         int u0 = L_vertices[i];
         base_0 = graph.rev_column_indices + graph.rev_row_offset[u0];
         size_0 = graph.rev_row_offset[u0 + 1] - graph.rev_row_offset[u0];
@@ -567,10 +669,13 @@ __launch_bounds__(32 * WARP_PER_SM, 1) __global__
       C_size = C_size_sd;
       // maximality check
       bool is_maximal = true;
-      for (int i = get_lane_id(); i < C_size; i += warpSize) {
+      for (int i = get_lane_id(); i < C_size; i += warpSize)
+      {
         int cur_size_l = C_level_neighbors[i] & 0xffff;
-        if (cur_size_l == L_size) {
-          if (i < second_id) {
+        if (cur_size_l == L_size)
+        {
+          if (i < second_id)
+          {
             is_maximal = false;
             break;
           }
@@ -578,21 +683,24 @@ __launch_bounds__(32 * WARP_PER_SM, 1) __global__
         }
       }
       is_maximal = __all_sync(FULL_MASK, is_maximal);
-      if (!is_maximal) {
+      if (!is_maximal)
+      {
         continue;
       }
       local_mb_counter++;
 
-      for (int i = get_lane_id(); i < L_size; i += warpSize) L_level[i] = 0;
+      for (int i = get_lane_id(); i < L_size; i += warpSize)
+        L_level[i] = 0;
 
       auto iterate_start = clock64();
       IterProcess(graph, L_vertices, L_level, L_size, C_vertices,
                   C_level_neighbors, C_size, exe_stack, next_id,
                   local_mb_counter
-                  #ifdef NN
-                  , bitsets_ptr
-                  #endif
-                  );
+#ifdef NN
+                  ,
+                  bitsets_ptr
+#endif
+      );
     }
     __syncthreads();
   }
@@ -602,12 +710,14 @@ __launch_bounds__(32 * WARP_PER_SM, 1) __global__
   // if (get_lane_id() == 0) printf("%4d\t", warp_id);
   __syncthreads();
   unsigned long long sm_end = clock64();
-  if (threadIdx.x == 0 && clock_rate != 0) {
+  if (threadIdx.x == 0 && clock_rate != 0)
+  {
     printf("SM exit: %lf\n", (sm_end - sm_start) / 1000.0 / clock_rate);
   }
 }
 
-IterFinderGpu2::IterFinderGpu2(CSRBiGraph *graph_in) : IterFinderGpu(graph_in) {
+IterFinderGpu2::IterFinderGpu2(CSRBiGraph *graph_in) : IterFinderGpu(graph_in)
+{
   graph_gpu_ = new CSRBiGraph();
   gpuErrchk(cudaSetDevice(0));
   graph_gpu_->CopyToGpu(*graph_in);
@@ -621,7 +731,8 @@ IterFinderGpu2::IterFinderGpu2(CSRBiGraph *graph_in) : IterFinderGpu(graph_in) {
   gpuErrchk(cudaMemset(dev_global_buffer_, 0, g_size * sizeof(int)));
 }
 
-IterFinderGpu2::~IterFinderGpu2() {
+IterFinderGpu2::~IterFinderGpu2()
+{
   graph_gpu_->Reset();
   delete graph_gpu_;
   gpuErrchk(cudaFree(dev_global_buffer_));
@@ -629,12 +740,13 @@ IterFinderGpu2::~IterFinderGpu2() {
   gpuErrchk(cudaFree(dev_processing_vertex_));
 }
 
-void IterFinderGpu2::Execute() {
+void IterFinderGpu2::Execute()
+{
   start_time_ = get_cur_time();
   unsigned long long clock_initialize, clock_iterate, host_total_clock;
   IterFinderKernel_2<<<MAX_BLOCKS, WARP_PER_BLOCK * 32>>>(
-    *graph_gpu_, dev_global_buffer_, dev_mb_, dev_processing_vertex_, 
-    clock_rate);
+      *graph_gpu_, dev_global_buffer_, dev_mb_, dev_processing_vertex_,
+      clock_rate);
   gpuErrchk(cudaGetLastError());
   gpuErrchk(cudaDeviceSynchronize());
   gpuErrchk(cudaMemcpy(&maximal_nodes_, dev_mb_, sizeof(unsigned long long),
@@ -651,7 +763,8 @@ void IterFinderGpu2::Execute() {
 __launch_bounds__(32 * WARP_PER_SM, 1) __global__
     void ChildKernel(CSRBiGraph graph, int *global_buffer,
                      unsigned long long *maximal_bicliques, int block_id, int first_vertex,
-                     int next_id, int C_size_sd) {
+                     int next_id, int C_size_sd)
+{
   __shared__ int C_scanner_id_sd;
   int warp_id = threadIdx.x / warpSize;
 
@@ -668,27 +781,31 @@ __launch_bounds__(32 * WARP_PER_SM, 1) __global__
   int *C_vertices = warp_buffer + 3 * MAX_DEGREE_BOUND;
   int *C_level_neighbors =
       warp_buffer + 3 * MAX_DEGREE_BOUND + MAX_2_H_DEGREE_BOUND;
-  #ifdef NN
-  bitset_t *bitsets_ptr = 
-    (bitset_t *)(C_level_neighbors + MAX_2_H_DEGREE_BOUND);
-  #endif
+#ifdef NN
+  bitset_t *bitsets_ptr =
+      (bitset_t *)(C_level_neighbors + MAX_2_H_DEGREE_BOUND);
+#endif
   int C_size;
 
   int second_id, second_vertex;
   int local_mb_counter = 0;
 
-  if (threadIdx.x == 0) {
+  if (threadIdx.x == 0)
+  {
     C_scanner_id_sd = next_id;
   }
 
   __syncthreads();
 
-  while (true) {
-    if (get_lane_id() == 0) {
+  while (true)
+  {
+    if (get_lane_id() == 0)
+    {
       second_id = atomicAdd(&C_scanner_id_sd, 1);
     }
     second_id = get_value_from_lane_x(second_id);
-    if (second_id >= C_size_sd) {
+    if (second_id >= C_size_sd)
+    {
       break;
     }
     second_vertex = C_vertices_sd[second_id];
@@ -705,11 +822,13 @@ __launch_bounds__(32 * WARP_PER_SM, 1) __global__
     L_size = seq_intersect_warp(base_0, size_0, base_1, size_1, L_vertices);
 
     // gen C
-    for (int i = get_lane_id(); i < C_size_sd; i += warpSize) {
+    for (int i = get_lane_id(); i < C_size_sd; i += warpSize)
+    {
       C_level_neighbors[i] = 0x7fff0000;
     }
 
-    for (int i = 0; i < L_size; i++) {
+    for (int i = 0; i < L_size; i++)
+    {
       int u0 = L_vertices[i];
       base_0 = graph.rev_column_indices + graph.rev_row_offset[u0];
       size_0 = graph.rev_row_offset[u0 + 1] - graph.rev_row_offset[u0];
@@ -723,10 +842,13 @@ __launch_bounds__(32 * WARP_PER_SM, 1) __global__
     C_size = C_size_sd;
     // maximality check
     bool is_maximal = true;
-    for (int i = get_lane_id(); i < C_size; i += warpSize) {
+    for (int i = get_lane_id(); i < C_size; i += warpSize)
+    {
       int cur_size_l = C_level_neighbors[i] & 0xffff;
-      if (cur_size_l == L_size) {
-        if (i < second_id) {
+      if (cur_size_l == L_size)
+      {
+        if (i < second_id)
+        {
           is_maximal = false;
           break;
         }
@@ -734,60 +856,75 @@ __launch_bounds__(32 * WARP_PER_SM, 1) __global__
       }
     }
     is_maximal = __all_sync(FULL_MASK, is_maximal);
-    if (!is_maximal) continue;
+    if (!is_maximal)
+      continue;
     local_mb_counter++;
 
-    for (int i = get_lane_id(); i < L_size; i += warpSize) L_level[i] = 0;
+    for (int i = get_lane_id(); i < L_size; i += warpSize)
+      L_level[i] = 0;
 
     IterProcess(graph, L_vertices, L_level, L_size, C_vertices,
                 C_level_neighbors, C_size, exe_stack, next_id,
                 local_mb_counter
-                #ifdef NN
-                , bitsets_ptr
-                #endif
-                );
+#ifdef NN
+                ,
+                bitsets_ptr
+#endif
+    );
   }
-  if (get_lane_id() == 0 && local_mb_counter != 0) {
+  if (get_lane_id() == 0 && local_mb_counter != 0)
+  {
     atomicAdd(maximal_bicliques, local_mb_counter);
   }
 }
 
-__device__ __forceinline__ int get_common_neighbors(int *row_offset, int *column_indices,  int const *vertices, int vertices_size, 
-                                     int * const buffer, int * const result) {
+__device__ __forceinline__ int get_common_neighbors(int *row_offset, int *column_indices, int const *vertices, int vertices_size,
+                                                    int *const buffer, int *const result)
+{
   int now_vertex = vertices[vertices_size - 1];
   int size_temp = row_offset[now_vertex + 1] - row_offset[now_vertex];
   int *base = column_indices + row_offset[now_vertex];
   int buffer_size = 0;
   int result_size;
-  if ((vertices_size - 1) & 1) {
-    for (int i = get_lane_id(); i < size_temp; i += warpSize) {
+  if ((vertices_size - 1) & 1)
+  {
+    for (int i = get_lane_id(); i < size_temp; i += warpSize)
+    {
       buffer[i] = base[i];
     }
     buffer_size = size_temp;
-  } else {
-    for (int i = get_lane_id(); i < size_temp; i += warpSize) {
+  }
+  else
+  {
+    for (int i = get_lane_id(); i < size_temp; i += warpSize)
+    {
       result[i] = base[i];
     }
     result_size = size_temp;
   }
   __syncwarp();
-  for (int i = vertices_size - 2; i >= 0; i--) {
+  for (int i = vertices_size - 2; i >= 0; i--)
+  {
     now_vertex = vertices[i];
     size_temp = row_offset[now_vertex + 1] - row_offset[now_vertex];
     base = column_indices + row_offset[now_vertex];
-    if (i & 1) {
+    if (i & 1)
+    {
       buffer_size = seq_intersect_warp(result, result_size, base, size_temp, buffer);
     }
-    else {
+    else
+    {
       result_size = seq_intersect_warp(buffer, buffer_size, base, size_temp, result);
     }
   }
   return result_size;
 }
 
-__device__ __forceinline__ int get_all_neighbors(CSRBiGraph &graph, int const *vertices, const int &vertices_size, 
-                                     int * const buffer, int * const result) {
-  if (get_lane_id() == 0) {
+__device__ __forceinline__ int get_all_neighbors(CSRBiGraph &graph, int const *vertices, const int &vertices_size,
+                                                 int *const buffer, int *const result)
+{
+  if (get_lane_id() == 0)
+  {
     //printf("enter all\n");
   }
   int now_vertex = vertices[vertices_size - 1];
@@ -796,58 +933,74 @@ __device__ __forceinline__ int get_all_neighbors(CSRBiGraph &graph, int const *v
   int buffer_size;
   int result_size;
 
-  if(vertices_size > UNION_THRESHOLD) {
+  if (vertices_size > UNION_THRESHOLD)
+  {
     int cnt = 0, common_neighbors = 0;
-    for (int i = 0; i < graph.V_size; i++) {
+    for (int i = 0; i < graph.V_size; i++)
+    {
       size_temp = graph.row_offset[i + 1] - graph.row_offset[i];
       base = graph.column_indices + graph.row_offset[i];
-      common_neighbors = seq_intersect_warp_cnt (vertices, vertices_size, base, size_temp);
-      if(common_neighbors != 0) {
-        if(get_lane_id() == 0)result[cnt] = i;
+      common_neighbors = seq_intersect_warp_cnt(vertices, vertices_size, base, size_temp);
+      if (common_neighbors != 0)
+      {
+        if (get_lane_id() == 0)
+          result[cnt] = i;
         cnt++;
       }
     }
     return cnt;
   }
 
-  if ((vertices_size - 1) & 1) {
-    for (int i = get_lane_id(); i < size_temp; i += warpSize) {
-      buffer[i] = base[i]; 
+  if ((vertices_size - 1) & 1)
+  {
+    for (int i = get_lane_id(); i < size_temp; i += warpSize)
+    {
+      buffer[i] = base[i];
     }
     buffer_size = size_temp;
-  } else {
-    for (int i = get_lane_id(); i < size_temp; i += warpSize) {
+  }
+  else
+  {
+    for (int i = get_lane_id(); i < size_temp; i += warpSize)
+    {
       result[i] = base[i];
     }
     result_size = size_temp;
   }
-  for (int i = vertices_size - 2; i >= 0; i--) {
+  for (int i = vertices_size - 2; i >= 0; i--)
+  {
     now_vertex = vertices[i];
     size_temp = graph.rev_row_offset[now_vertex + 1] - graph.rev_row_offset[now_vertex];
     base = graph.rev_column_indices + graph.rev_row_offset[now_vertex];
-    if (i & 1) {
+    if (i & 1)
+    {
       buffer_size = seq_union_warp_adv(result, result_size, base, size_temp, buffer);
-      if (buffer_size >= MAX_2_H_DEGREE_BOUND && get_lane_id() == 0) {
+      if (buffer_size >= MAX_2_H_DEGREE_BOUND && get_lane_id() == 0)
+      {
         printf("error\n");
       }
     }
-    else {
+    else
+    {
       result_size = seq_union_warp_adv(buffer, buffer_size, base, size_temp, result);
-      if (result_size >= MAX_2_H_DEGREE_BOUND && get_lane_id() == 0) {
+      if (result_size >= MAX_2_H_DEGREE_BOUND && get_lane_id() == 0)
+      {
         printf("error\n");
       }
     }
   }
-  if (get_lane_id() == 0) {
+  if (get_lane_id() == 0)
+  {
     //printf("exit all\n");
   }
   return result_size;
 }
 
 __device__ bool IterFinderWithMultipleVertex(CSRBiGraph graph, int *warp_buffer, WorkList<LargeTask> *global_large_worklist,
-                                             const TinyTask &tt, int &local_mb_counter, unsigned long long *large_count, 
+                                             const TinyTask &tt, int &local_mb_counter, unsigned long long *large_count,
                                              unsigned long long *non_maximal = nullptr,
-                                             int bound_height = 20, int bound_size = 1500) {
+                                             int bound_height = 20, int bound_size = 1500)
+{
   int *L_vertices = warp_buffer;
   int *L_level = warp_buffer + MAX_DEGREE_BOUND;
 
@@ -856,10 +1009,10 @@ __device__ bool IterFinderWithMultipleVertex(CSRBiGraph graph, int *warp_buffer,
   int *C_vertices = warp_buffer + 3 * MAX_DEGREE_BOUND;
   int *C_level_neighbors =
       warp_buffer + 3 * MAX_DEGREE_BOUND + MAX_2_H_DEGREE_BOUND;
-  #ifdef NN
-  bitset_t *bitsets = 
+#ifdef NN
+  bitset_t *bitsets =
       (bitset_t *)(warp_buffer + 3 * MAX_DEGREE_BOUND + 2 * MAX_2_H_DEGREE_BOUND);
-  #endif
+#endif
   bool has_vertex = get_lane_id() < 4 && tt.vertices[get_lane_id()] != -1;
   int vertices_size = count_bit(__ballot_sync(0xffffffff, has_vertex));
 
@@ -870,13 +1023,15 @@ __device__ bool IterFinderWithMultipleVertex(CSRBiGraph graph, int *warp_buffer,
 
   int *R_vertices = exe_stack;
   int R_size = get_common_neighbors(graph.rev_row_offset, graph.rev_column_indices, L_vertices, L_size, C_vertices, R_vertices);
-  if(R_size > MAX_DEGREE_BOUND) {
+  if (R_size > MAX_DEGREE_BOUND)
+  {
     printf("error! R_size is larger than MAX_DEGREE_BOUND(%d/%d).\n", R_size, MAX_DEGREE_BOUND);
   }
- 
+
   //maximality check
   bool is_maximal = true;
-  if (vertices_size > 1) {
+  if (vertices_size > 1)
+  {
     int *L_vertices_last = L_level;
     int L_size_last = get_common_neighbors(graph.row_offset, graph.column_indices,
                                            tt.vertices, vertices_size - 1,
@@ -885,90 +1040,108 @@ __device__ bool IterFinderWithMultipleVertex(CSRBiGraph graph, int *warp_buffer,
     int R_size_last = get_common_neighbors(graph.rev_row_offset, graph.rev_column_indices,
                                            L_vertices_last, L_size_last, C_level_neighbors,
                                            R_vertices_last);
-    for(int i = get_lane_id(); i < R_size && R_vertices[i] < tt.vertices[vertices_size - 1]; i += warpSize) {
-      if(i >= R_size_last || R_vertices[i] != R_vertices_last[i])is_maximal = false;
+    for (int i = get_lane_id(); i < R_size && R_vertices[i] < tt.vertices[vertices_size - 1]; i += warpSize)
+    {
+      if (i >= R_size_last || R_vertices[i] != R_vertices_last[i])
+        is_maximal = false;
     }
     is_maximal = __all_sync(FULL_MASK, is_maximal);
-  } else if (vertices_size == 1){
+  }
+  else if (vertices_size == 1)
+  {
     is_maximal = R_vertices[0] == tt.vertices[0];
   }
-  if(!is_maximal){
-    if (get_lane_id() == 0 && non_maximal != nullptr) {
+  if (!is_maximal)
+  {
+    if (get_lane_id() == 0 && non_maximal != nullptr)
+    {
       atomicAdd(non_maximal, 1);
     }
     return false;
   }
 
-  
   local_mb_counter++;
-  
 
-  if(L_size > 1){
+  if (L_size > 1)
+  {
     //generate C_vertices
     int size_temp = get_all_neighbors(graph, L_vertices, L_size, C_level_neighbors, C_vertices);
     int next_id;
-    next_id = binary_search(tt.vertices[vertices_size - 1], C_vertices, 0, size_temp - 1) 
-              - binary_search(tt.vertices[vertices_size - 1], R_vertices, 0, R_size - 1);
+    next_id = binary_search(tt.vertices[vertices_size - 1], C_vertices, 0, size_temp - 1) - binary_search(tt.vertices[vertices_size - 1], R_vertices, 0, R_size - 1);
     int C_size = seq_diff_warp(C_vertices, size_temp, R_vertices, R_size);
-    if( 
-      ((C_size - next_id) > bound_height || L_size > bound_height) && (C_size - next_id) * L_size > bound_size 
-      && !global_large_worklist->is_full())
+    if (
+        ((C_size - next_id) > bound_height || L_size > bound_height) && (C_size - next_id) * L_size > bound_size && !global_large_worklist->is_full())
     {
-      if(vertices_size == 4) {
-      } else {
+      if (vertices_size == 4)
+      {
+      }
+      else
+      {
         __syncwarp();
 
-        while (true){
-          if (!global_large_worklist->is_full()) {
+        while (true)
+        {
+          if (!global_large_worklist->is_full())
+          {
             if (global_large_worklist->push_work(tt))
             {
-              if (get_lane_id() == 0) {
+              if (get_lane_id() == 0)
+              {
                 atomicAdd(large_count, 1);
               }
               return true;
             }
-          } else 
+          }
+          else
           {
-            break;//防止因为队列满导致无法结束
+            break; //防止因为队列满导致无法结束
           }
         }
       }
     }
-    if(C_size > MAX_2_H_DEGREE_BOUND)
+    if (C_size > MAX_2_H_DEGREE_BOUND)
       printf("error! C_size is larger than MAX_2_H_DEGREE_BOUND(%d/%d).\n", C_size, MAX_2_H_DEGREE_BOUND);
 
-    for (int i = get_lane_id(); i < C_size; i += warpSize) {
+    for (int i = get_lane_id(); i < C_size; i += warpSize)
+    {
       C_level_neighbors[i] = 0x7fff0000;
     }
 
-    for (int i = 0; i < L_size; i++) {
+    for (int i = 0; i < L_size; i++)
+    {
       int u0 = L_vertices[i];
       int *base_0 = graph.rev_column_indices + graph.rev_row_offset[u0];
       int size_0 = graph.rev_row_offset[u0 + 1] - graph.rev_row_offset[u0];
 
       seq_intersect_warp_for_iter_finder(C_vertices, C_level_neighbors,
-                                             C_size, base_0, size_0);
+                                         C_size, base_0, size_0);
     }
 
-    for(int i = get_lane_id(); i < C_size; i += warpSize) {
-      int cur_size_l = C_level_neighbors[i] & 0xffff;  
-      if(cur_size_l == L_size) {
+    for (int i = get_lane_id(); i < C_size; i += warpSize)
+    {
+      int cur_size_l = C_level_neighbors[i] & 0xffff;
+      if (cur_size_l == L_size)
+      {
         C_level_neighbors[i] = L_size;
       }
     }
-    for (int i = get_lane_id(); i < L_size; i += warpSize) L_level[i] = 0;
+    for (int i = get_lane_id(); i < L_size; i += warpSize)
+      L_level[i] = 0;
     IterProcess(graph, L_vertices, L_level, L_size, C_vertices,
-                    C_level_neighbors, C_size, exe_stack, next_id,
-                    local_mb_counter
-                #ifdef NN
-                , bitsets
-                #endif
-                , non_maximal);
+                C_level_neighbors, C_size, exe_stack, next_id,
+                local_mb_counter
+#ifdef NN
+                ,
+                bitsets
+#endif
+                ,
+                non_maximal);
   }
   return false;
 }
 
-__device__ int LargeToTiny(CSRBiGraph graph, int *warp_buffer, LargeTask task, TinyTask *result) {
+__device__ int LargeToTiny(CSRBiGraph graph, int *warp_buffer, LargeTask task, TinyTask *result)
+{
   int *L = warp_buffer + MAX_DEGREE_BOUND;
   int *buffer = L + MAX_DEGREE_BOUND;
   int *C = buffer + MAX_2_H_DEGREE_BOUND;
@@ -979,11 +1152,12 @@ __device__ int LargeToTiny(CSRBiGraph graph, int *warp_buffer, LargeTask task, T
   int L_size = get_common_neighbors(graph.row_offset, graph.column_indices, task.vertices, vertices_size, buffer, L);
   int C_size = get_all_neighbors(graph, L, L_size, buffer, C);
   int R_size = get_common_neighbors(graph.rev_row_offset, graph.rev_column_indices, L, L_size, buffer, R);
-  int next_id = binary_search(task.vertices[vertices_size - 1], C, 0, C_size - 1)
-    - binary_search(task.vertices[vertices_size - 1], R, 0, R_size - 1);
+  int next_id = binary_search(task.vertices[vertices_size - 1], C, 0, C_size - 1) - binary_search(task.vertices[vertices_size - 1], R, 0, R_size - 1);
   C_size = seq_diff_warp(C, C_size, R, R_size);
-  for (int i = get_lane_id() + next_id; i < C_size; i += warpSize) {
-    for (int j = 0; j < 4; j++) {
+  for (int i = get_lane_id() + next_id; i < C_size; i += warpSize)
+  {
+    for (int j = 0; j < 4; j++)
+    {
       result[i - next_id].vertices[j] = task.vertices[j];
     }
     result[i - next_id].vertices[vertices_size] = C[i];
@@ -991,31 +1165,31 @@ __device__ int LargeToTiny(CSRBiGraph graph, int *warp_buffer, LargeTask task, T
   return C_size - next_id;
 }
 
-
-#define DIVIDER_PER_BLOCK 1 
+#define DIVIDER_PER_BLOCK 1
 #define LARGE_WORKLIST_SIZE 0x48000
 
-#define LOCAL_TINY_WORKLIST_SIZE 0x180 
+#define LOCAL_TINY_WORKLIST_SIZE 0x180
 #define LOCAL_TINY_WORKLIST_THRESHOLD LOCAL_TINY_WORKLIST_SIZE //* 0.6
 #define CONSUMER_PER_BLOCK (WARP_PER_BLOCK - DIVIDER_PER_BLOCK)
 __launch_bounds__(32 * WARP_PER_SM, 1) __global__
-    void IterFinderKernel_6(CSRBiGraph graph, int *global_buffer, 
+    void IterFinderKernel_6(CSRBiGraph graph, int *global_buffer,
                             unsigned long long *maximal_bicliques,
-                            unsigned long long *mb_system, int *processing_vertex,  
-                            WorkList<LargeTask> *global_large_worklist, 
-                            unsigned long long *global_count, 
+                            unsigned long long *mb_system, int *processing_vertex,
+                            WorkList<LargeTask> *global_large_worklist,
+                            unsigned long long *global_count,
                             unsigned long long *large_count, unsigned long long *tiny_count,
                             unsigned long long *non_maximal,
-                            int bound_height, int bound_size, double clock_rate = 0
-                            ) {
-  unsigned long long sm_start = clock64(); 
+                            int bound_height, int bound_size, double clock_rate = 0)
+{
+  unsigned long long sm_start = clock64();
   int warp_id = (blockIdx.x * blockDim.x + threadIdx.x) / warpSize;
   int *warp_buffer = global_buffer + (size_t)BUFFER_PER_WARP_2 * warp_id +
                      (size_t)SD_BUFFER_PER_BLOCK * (blockIdx.x + 1);
   int local_mb_counter = 0;
 
   __shared__ TinyTask local_tiny_worklist_ptr[LOCAL_TINY_WORKLIST_SIZE];
-  for (int i = threadIdx.x; i < LOCAL_TINY_WORKLIST_SIZE; i += blockDim.x) {
+  for (int i = threadIdx.x; i < LOCAL_TINY_WORKLIST_SIZE; i += blockDim.x)
+  {
     local_tiny_worklist_ptr[i].Init();
   }
   TinyTask *tiny_buffer = (TinyTask *)warp_buffer;
@@ -1028,26 +1202,31 @@ __launch_bounds__(32 * WARP_PER_SM, 1) __global__
   unsigned long long ltc = 0;
 
   __shared__ WorkList<TinyTask> local_tiny_worklist;
-  if (threadIdx.x == 0) {
+  if (threadIdx.x == 0)
+  {
     local_tiny_worklist.Init(local_tiny_worklist_ptr, LOCAL_TINY_WORKLIST_SIZE);
   }
-  
-  #ifdef SINGLE_LOCAL
+
+#ifdef SINGLE_LOCAL
   __shared__ TinyTask local_tiny_worklist_ptr_2[LOCAL_TINY_WORKLIST_SIZE];
-  for (int i = threadIdx.x; i < LOCAL_TINY_WORKLIST_SIZE; i += blockDim.x) {
+  for (int i = threadIdx.x; i < LOCAL_TINY_WORKLIST_SIZE; i += blockDim.x)
+  {
     local_tiny_worklist_ptr_2[i].Init();
   }
   __shared__ WorkList<TinyTask> local_tiny_worklist_2;
-  if (threadIdx.x == 0) {
+  if (threadIdx.x == 0)
+  {
     local_tiny_worklist_2.Init(local_tiny_worklist_ptr_2, LOCAL_TINY_WORKLIST_SIZE);
   }
-  #endif
+#endif
 
   __threadfence_block();
   __syncthreads();
- 
-  if (threadIdx.x / warpSize < 1) {
-    while (true) {
+
+  if (threadIdx.x / warpSize < 1)
+  {
+    while (true)
+    {
       /*bool exit = false;
       if (get_lane_id() == 0 && (clock64() - sm_start) / 1000.0 / clock_rate > 10) {
         exit = true;
@@ -1057,33 +1236,39 @@ __launch_bounds__(32 * WARP_PER_SM, 1) __global__
         break;
       }*/
       __syncwarp();
-      #ifdef SINGLE_LEVEL_QUEUE
-      if (local_tiny_worklist.get_work_num() > 0) {
-      #else 
-      #ifdef SINGLE_LOCAL
-      if (local_tiny_worklist_2.get_work_num() > 0) {
-      #else
-      if (global_large_worklist->get_work_num() > 0) {
-      #endif
-      #endif
+#ifdef SINGLE_LEVEL_QUEUE
+      if (local_tiny_worklist.get_work_num() > 0)
+      {
+#else
+#ifdef SINGLE_LOCAL
+      if (local_tiny_worklist_2.get_work_num() > 0)
+      {
+#else
+      if (global_large_worklist->get_work_num() > 0)
+      {
+#endif
+#endif
         LargeTask lt;
-        #ifdef SINGLE_LEVEL_QUEUE
+#ifdef SINGLE_LEVEL_QUEUE
         size_t get_num = local_tiny_worklist.get(lt);
-        #else
-        #ifdef SINGLE_LOCAL
+#else
+#ifdef SINGLE_LOCAL
         size_t get_num = local_tiny_worklist_2.get(lt);
-        #else
+#else
         size_t get_num = global_large_worklist->get(lt);
-        #endif
-        #endif
-        if (get_num <= 0) continue;
+#endif
+#endif
+        if (get_num <= 0)
+          continue;
 
         int twn_p = LargeToTiny(graph, warp_buffer, lt, tiny_buffer);
-        if (get_lane_id() == 0) {
+        if (get_lane_id() == 0)
+        {
           atomicAdd(tiny_count, twn_p);
         }
         int pushed = 0;
-        while (pushed < twn_p) {
+        while (pushed < twn_p)
+        {
           /*bool exit = false;
           if (get_lane_id() == 0 && (clock64() - sm_start) / 1000.0 / clock_rate > 10) {
             exit = true;
@@ -1093,37 +1278,44 @@ __launch_bounds__(32 * WARP_PER_SM, 1) __global__
             break;
           }*/
           __syncwarp();
-          #ifdef SINGLE_LEVEL_QUEUE
-          if (!global_large_worklist->is_full()) {
-            size_t pushing = global_large_worklist->push_works(tiny_buffer + pushed, 
+#ifdef SINGLE_LEVEL_QUEUE
+          if (!global_large_worklist->is_full())
+          {
+            size_t pushing = global_large_worklist->push_works(tiny_buffer + pushed,
+                                                               twn_p - pushed);
+#else
+          if (local_tiny_worklist.get_work_num() < LOCAL_TINY_WORKLIST_THRESHOLD)
+          {
+            size_t pushing = local_tiny_worklist.push_works(tiny_buffer + pushed,
                                                             twn_p - pushed);
-          #else 
-          if (local_tiny_worklist.get_work_num() < LOCAL_TINY_WORKLIST_THRESHOLD) {
-            size_t pushing = local_tiny_worklist.push_works(tiny_buffer + pushed, 
-                                                            twn_p - pushed);
-          #endif
+#endif
             pushed += pushing;
           }
         }
-        llc ++;
+        llc++;
         continue;
       }
-      if (pv >= graph.V_size) {
-        if (get_lane_id() == 0) {
-          if (llc > 0) {
+      if (pv >= graph.V_size)
+      {
+        if (get_lane_id() == 0)
+        {
+          if (llc > 0)
+          {
             atomicAdd(large_count, -llc);
             llc = 0;
           }
         }
-        if (gc == 0 && lc == 0 && tc == 0)break;
+        if (gc == 0 && lc == 0 && tc == 0)
+          break;
       }
     }
-  } 
+  }
   else
   {
     int lgc = 0;
-    while (true) {
-      /*bool exit = false;
+    while (true)
+    {
+/*bool exit = false;
       if (get_lane_id() == 0 && (clock64() - sm_start) / 1000.0 / clock_rate > 10) {
         exit = true;
       }
@@ -1131,77 +1323,87 @@ __launch_bounds__(32 * WARP_PER_SM, 1) __global__
       if (exit) {
         break;
       }*/
-      #ifdef PRINT_TIMELY
-      if (get_lane_id() == 0 && local_mb_counter > 0) {
+#ifdef PRINT_TIMELY
+      if (get_lane_id() == 0 && local_mb_counter > 0)
+      {
         atomicAdd_system(mb_system, local_mb_counter);
         local_mb_counter = 0;
       }
-      #endif
+#endif
       __syncwarp();
-      #ifdef SINGLE_LEVEL_QUEUE
-      if (!global_large_worklist->is_empty()) {
-      #else
-      if (!local_tiny_worklist.is_empty()) {
-      #endif
+#ifdef SINGLE_LEVEL_QUEUE
+      if (!global_large_worklist->is_empty())
+      {
+#else
+      if (!local_tiny_worklist.is_empty())
+      {
+#endif
         TinyTask tt;
-        #ifdef SINGLE_LEVEL_QUEUE
-        if (global_large_worklist->get(tt)) {
-          IterFinderWithMultipleVertex(graph, warp_buffer, &local_tiny_worklist, 
-                                     tt, local_mb_counter, large_count
-                                     , non_maximal, bound_height, bound_size);
-        #else
-        #ifdef SINGLE_LOCAL 
-        if (local_tiny_worklist.get(tt)) {
-          IterFinderWithMultipleVertex(graph, warp_buffer, &local_tiny_worklist_2, 
-                                     tt, local_mb_counter, large_count
-                                     , non_maximal, bound_height, bound_size);
-        #else
-        if (local_tiny_worklist.get(tt)) {
-          IterFinderWithMultipleVertex(graph, warp_buffer, global_large_worklist, 
-                                     tt, local_mb_counter, large_count
-                                     , non_maximal, bound_height, bound_size);
-        #endif
-        #endif
+#ifdef SINGLE_LEVEL_QUEUE
+        if (global_large_worklist->get(tt))
+        {
+          IterFinderWithMultipleVertex(graph, warp_buffer, &local_tiny_worklist,
+                                       tt, local_mb_counter, large_count, non_maximal, bound_height, bound_size);
+#else
+#ifdef SINGLE_LOCAL
+        if (local_tiny_worklist.get(tt))
+        {
+          IterFinderWithMultipleVertex(graph, warp_buffer, &local_tiny_worklist_2,
+                                       tt, local_mb_counter, large_count, non_maximal, bound_height, bound_size);
+#else
+        if (local_tiny_worklist.get(tt))
+        {
+          IterFinderWithMultipleVertex(graph, warp_buffer, global_large_worklist,
+                                       tt, local_mb_counter, large_count, non_maximal, bound_height, bound_size);
+#endif
+#endif
           ltc++;
           continue;
         }
       }
       __syncwarp();
-      if (pv < graph.V_size) {
+      if (pv < graph.V_size)
+      {
         int first_vertex;
-        if (get_lane_id() == 0) {
+        if (get_lane_id() == 0)
+        {
           first_vertex = graph.V_size - 1 - atomicAdd(processing_vertex, 1);
-          if (first_vertex >= 0) atomicAdd(global_count, 1);
+          if (first_vertex >= 0)
+            atomicAdd(global_count, 1);
         }
         first_vertex = get_value_from_lane_x(first_vertex);
-        if (first_vertex >= 0) {
+        if (first_vertex >= 0)
+        {
           LongTask lt(first_vertex, -1);
-          #ifdef SINGLE_LEVEL_QUEUE
-          IterFinderWithMultipleVertex(graph, warp_buffer, &local_tiny_worklist, 
-                                     lt, local_mb_counter, large_count
-                                     , non_maximal, bound_height, bound_size);
-          #else
-          #ifdef SINGLE_LOCAL
-          IterFinderWithMultipleVertex(graph, warp_buffer, &local_tiny_worklist_2, 
-                                     lt, local_mb_counter, large_count,  
-                                     non_maximal, bound_height, bound_size);
-          #else
-          IterFinderWithMultipleVertex(graph, warp_buffer, global_large_worklist, 
-                                     lt, local_mb_counter, large_count,  
-                                     non_maximal, bound_height, bound_size);
-          #endif
-          #endif
+#ifdef SINGLE_LEVEL_QUEUE
+          IterFinderWithMultipleVertex(graph, warp_buffer, &local_tiny_worklist,
+                                       lt, local_mb_counter, large_count, non_maximal, bound_height, bound_size);
+#else
+#ifdef SINGLE_LOCAL
+          IterFinderWithMultipleVertex(graph, warp_buffer, &local_tiny_worklist_2,
+                                       lt, local_mb_counter, large_count,
+                                       non_maximal, bound_height, bound_size);
+#else
+          IterFinderWithMultipleVertex(graph, warp_buffer, global_large_worklist,
+                                       lt, local_mb_counter, large_count,
+                                       non_maximal, bound_height, bound_size);
+#endif
+#endif
 
-          lgc ++;
+          lgc++;
         }
       }
-      else {
-        if(get_lane_id() == 0) {
-          if (ltc > 0) {
+      else
+      {
+        if (get_lane_id() == 0)
+        {
+          if (ltc > 0)
+          {
             atomicAdd(tiny_count, -ltc);
             ltc = 0;
           }
-          if (lgc > 0) {
+          if (lgc > 0)
+          {
             atomicAdd(global_count, -lgc);
             lgc = 0;
           }
@@ -1214,15 +1416,17 @@ __launch_bounds__(32 * WARP_PER_SM, 1) __global__
   }
   __syncthreads();
   unsigned long long sm_end = clock64();
-  if (threadIdx.x == 0 && clock_rate != 0) {
+  if (threadIdx.x == 0 && clock_rate != 0)
+  {
     printf("SM exit: %lf\n", (sm_end - sm_start) / 1000.0 / clock_rate);
   }
-  if (get_lane_id() == 0 && local_mb_counter != 0) {
-    #ifdef PRINT_TIMELY
+  if (get_lane_id() == 0 && local_mb_counter != 0)
+  {
+#ifdef PRINT_TIMELY
     atomicAdd_system(mb_system, local_mb_counter);
-    #else
+#else
     atomicAdd(maximal_bicliques, local_mb_counter);
-    #endif
+#endif
     local_mb_counter = 0;
   }
 
@@ -1231,9 +1435,9 @@ __launch_bounds__(32 * WARP_PER_SM, 1) __global__
   //}
 }
 
-
-IterFinderGpu6::IterFinderGpu6(CSRBiGraph *graph_in, int bound_height_ , int bound_size_) 
-                : IterFinderGpu(graph_in), bound_height(bound_height_), bound_size(bound_size_) {
+IterFinderGpu6::IterFinderGpu6(CSRBiGraph *graph_in, int bound_height_, int bound_size_)
+    : IterFinderGpu(graph_in), bound_height(bound_height_), bound_size(bound_size_)
+{
   graph_gpu_ = new CSRBiGraph();
   gpuErrchk(cudaSetDevice(0));
   graph_gpu_->CopyToGpu(*graph_in);
@@ -1264,10 +1468,10 @@ IterFinderGpu6::IterFinderGpu6(CSRBiGraph *graph_in, int bound_height_ , int bou
   gpuErrchk(cudaMemset(dev_mb_, 0, sizeof(unsigned long long)));
   gpuErrchk(cudaMemset(dev_processing_vertex_, 0, sizeof(int)));
   gpuErrchk(cudaMemset(dev_global_buffer_, 0, g_size * sizeof(int)));
-
 }
 
-IterFinderGpu6::~IterFinderGpu6() {
+IterFinderGpu6::~IterFinderGpu6()
+{
   graph_gpu_->Reset();
   delete graph_gpu_;
   gpuErrchk(cudaFree(dev_global_buffer_));
@@ -1275,7 +1479,8 @@ IterFinderGpu6::~IterFinderGpu6() {
   gpuErrchk(cudaFree(dev_processing_vertex_));
 }
 
-void IterFinderGpu6::Execute() {
+void IterFinderGpu6::Execute()
+{
   cudaStream_t stream_default;
   cudaStreamCreate(&stream_default);
   cudaStream_t stream;
@@ -1286,59 +1491,65 @@ void IterFinderGpu6::Execute() {
   cudaMemset(non_maximal, 0, sizeof(unsigned long long));
   //printf("large worklist size: %d local tiny size: %d\n", LARGE_WORKLIST_SIZE, LOCAL_TINY_WORKLIST_SIZE);
   IterFinderKernel_6<<<MAX_BLOCKS, WARP_PER_BLOCK * 32, 0, stream_default>>>(
-    *graph_gpu_, dev_global_buffer_, dev_mb_, mb_system, dev_processing_vertex_,
-       global_large_worklist, global_count, large_count, tiny_count,
-     non_maximal, bound_height, bound_size, clock_rate);
+      *graph_gpu_, dev_global_buffer_, dev_mb_, mb_system, dev_processing_vertex_,
+      global_large_worklist, global_count, large_count, tiny_count,
+      non_maximal, bound_height, bound_size, clock_rate);
   int host_test;
   unsigned long long host_non_maximal;
   int time_count = 0, sleep_time = 1000000;
   cudaEvent_t stop;
   cudaEventCreate(&stop);
   cudaEventRecord(stop);
-  #ifdef PRINT_TIMELY
-  /*while (cudaEventQuery(stop) != cudaSuccess) {
+#ifdef PRINT_TIMELY
+  while (cudaEventQuery(stop) != cudaSuccess)
+  {
     usleep(sleep_time);
     time_count++;
-    printf("%d\n", time_count);
-      //int *dev_mb_copy;
-      //cudaMalloc(&dev_mb_copy, sizeof(int));
-      //gpuErrchk(cudaMemcpyAsync(mb_host, dev_mb_, sizeof(int),
-      //                 cudaMemcpyDeviceToHost, stream));
-      //printf("host_mb: %d\n", *mb_host);
-    maximal_nodes_ = *mb_host;
-    exe_time_ = get_cur_time() - start_time_;
-    PrintResult();
-    if (time_count > 172800) {
+    // int *dev_mb_copy;
+    // cudaMalloc(&dev_mb_copy, sizeof(int));
+    // gpuErrchk(cudaMemcpyAsync(mb_host, dev_mb_, sizeof(int),
+    //                           cudaMemcpyDeviceToHost, stream));
+    if (time_count % 3600 == 0)
+    {
+      printf("\t[%dh]: ", time_count / 3600);
+      maximal_nodes_ = *mb_host;
+      exe_time_ = get_cur_time() - start_time_;
+      PrintResult();
+    }
+    if (time_count > 172800)
+    {
       exit(0);
     }
-  }*/
-  #endif
+  }
+#endif
   gpuErrchk(cudaGetLastError());
   gpuErrchk(cudaDeviceSynchronize());
   cudaMemcpy(&host_non_maximal, non_maximal, sizeof(unsigned long long), cudaMemcpyDeviceToHost);
-  //printf("non_maximal: %lld\n", host_non_maximal);
-  #ifndef PRINT_TIMELY
+//printf("non_maximal: %lld\n", host_non_maximal);
+#ifndef PRINT_TIMELY
   gpuErrchk(cudaMemcpy(&maximal_nodes_, dev_mb_, sizeof(int),
                        cudaMemcpyDeviceToHost));
-  #else
-  maximal_nodes_ = * mb_host;
-  #endif
+#else
+  maximal_nodes_ = *mb_host;
+#endif
   exe_time_ = get_cur_time() - start_time_;
 }
 __launch_bounds__(32 * WARP_PER_SM, 1) __global__
-    void IterFinderKernel_7(CSRBiGraph graph, int *global_buffer, 
-                            unsigned long long *maximal_bicliques, int *processing_vertex, int end_vertex, 
-                            WorkList<LargeTask> *global_large_worklist, 
-                            unsigned long long *global_count, 
-                            unsigned long long *large_count, unsigned long long *tiny_count, unsigned long long *first_count, 
-                            int *isProcessed, int ngpus) {
+    void IterFinderKernel_7(CSRBiGraph graph, int *global_buffer,
+                            unsigned long long *maximal_bicliques, int *processing_vertex, int end_vertex,
+                            WorkList<LargeTask> *global_large_worklist,
+                            unsigned long long *global_count,
+                            unsigned long long *large_count, unsigned long long *tiny_count, unsigned long long *first_count,
+                            int *isProcessed, int ngpus)
+{
   int warp_id = (blockIdx.x * blockDim.x + threadIdx.x) / warpSize;
   int *warp_buffer = global_buffer + (size_t)BUFFER_PER_WARP_2 * warp_id +
                      (size_t)SD_BUFFER_PER_BLOCK * (blockIdx.x + 1);
   int local_mb_counter = 0;
 
   __shared__ TinyTask local_tiny_worklist_ptr[LOCAL_TINY_WORKLIST_SIZE];
-  for (int i = threadIdx.x; i < LOCAL_TINY_WORKLIST_SIZE; i += blockDim.x) {
+  for (int i = threadIdx.x; i < LOCAL_TINY_WORKLIST_SIZE; i += blockDim.x)
+  {
     local_tiny_worklist_ptr[i].Init();
   }
   TinyTask *tiny_buffer = (TinyTask *)warp_buffer;
@@ -1354,7 +1565,8 @@ __launch_bounds__(32 * WARP_PER_SM, 1) __global__
   __shared__ WorkList<TinyTask> local_tiny_worklist;
   __shared__ int allProcessed;
   __shared__ int processed;
-  if (threadIdx.x == 0) {
+  if (threadIdx.x == 0)
+  {
     local_tiny_worklist.Init(local_tiny_worklist_ptr, LOCAL_TINY_WORKLIST_SIZE);
     pvLarge = 0;
     allProcessed = 0;
@@ -1365,30 +1577,38 @@ __launch_bounds__(32 * WARP_PER_SM, 1) __global__
 
   __threadfence_block();
   __syncthreads();
-  
-  if (threadIdx.x / warpSize < 1) {
-    while (true) {
+
+  if (threadIdx.x / warpSize < 1)
+  {
+    while (true)
+    {
       __syncwarp();
-      if (global_large_worklist->get_work_num() > 0) {
+      if (global_large_worklist->get_work_num() > 0)
+      {
         LargeTask lt;
         size_t get_num = global_large_worklist->get(lt);
-        if (get_num <= 0) continue;
+        if (get_num <= 0)
+          continue;
         int twn_p = LargeToTiny(graph, warp_buffer, lt, tiny_buffer);
-        if (get_lane_id() == 0) {
+        if (get_lane_id() == 0)
+        {
           atomicAdd(tiny_count, twn_p);
         }
         int pushed = 0;
-        while (pushed < twn_p) {
+        while (pushed < twn_p)
+        {
           __syncwarp();
-          if (local_tiny_worklist.get_work_num() < LOCAL_TINY_WORKLIST_THRESHOLD) {
-            size_t pushing = local_tiny_worklist.push_works(tiny_buffer + pushed, 
+          if (local_tiny_worklist.get_work_num() < LOCAL_TINY_WORKLIST_THRESHOLD)
+          {
+            size_t pushing = local_tiny_worklist.push_works(tiny_buffer + pushed,
                                                             twn_p - pushed);
             pushed += pushing;
           }
         }
-        llc ++;
-        if (get_lane_id() == 0 && lt.vertices[1] == -1) {
-          atomicAdd(first_count , -1);
+        llc++;
+        if (get_lane_id() == 0 && lt.vertices[1] == -1)
+        {
+          atomicAdd(first_count, -1);
           //printf("fc: %lld\n", fc);
         }
         continue;
@@ -1413,32 +1633,39 @@ __launch_bounds__(32 * WARP_PER_SM, 1) __global__
         lsc ++;
         continue;
       }*/
-      if (volpvLarge == 1 && ap == 1) {
-        if (get_lane_id() == 0) {
-          if (llc > 0) {
+      if (volpvLarge == 1 && ap == 1)
+      {
+        if (get_lane_id() == 0)
+        {
+          if (llc > 0)
+          {
             atomicAdd(large_count, -llc);
             llc = 0;
           }
         }
-	//if (get_lane_id() == 0)printf("%d %d %d %d\n", gc, lc, tc, test); 
-        if (gc == 0 && lc == 0 && tc == 0)break;
+        //if (get_lane_id() == 0)printf("%d %d %d %d\n", gc, lc, tc, test);
+        if (gc == 0 && lc == 0 && tc == 0)
+          break;
       }
     }
-  } 
+  }
   else
   {
     int first_vertex = end_vertex;
     int lgc = 0;
-    while (true) {
+    while (true)
+    {
       __syncwarp();
-      if (!local_tiny_worklist.is_empty()) {
+      if (!local_tiny_worklist.is_empty())
+      {
         TinyTask tt;
-        if (local_tiny_worklist.get(tt)) {
+        if (local_tiny_worklist.get(tt))
+        {
           //if (global_large_worklist -> get_work_num() < LARGE_WORKLIST_THRESHOLD) {
-          //  IterFinderWithMultipleVertex(graph, warp_buffer, worklist_system, 
+          //  IterFinderWithMultipleVertex(graph, warp_buffer, worklist_system,
           //                             tt, local_mb_counter, system_count);
           //} else {
-          IterFinderWithMultipleVertex(graph, warp_buffer, global_large_worklist, 
+          IterFinderWithMultipleVertex(graph, warp_buffer, global_large_worklist,
                                        tt, local_mb_counter, large_count);
           //}
           ltc++;
@@ -1446,23 +1673,28 @@ __launch_bounds__(32 * WARP_PER_SM, 1) __global__
         }
       }
       __syncwarp();
-      if (volpvLarge == 0 || ap == 0) {
-        //if (global_large_worklist -> get_work_num() > 0) continue; 
-        if (get_lane_id() == 0) {
+      if (volpvLarge == 0 || ap == 0)
+      {
+        //if (global_large_worklist -> get_work_num() > 0) continue;
+        if (get_lane_id() == 0)
+        {
           first_vertex = -1;
           int tfc;
           bool localIsEmpty;
-          do {
+          do
+          {
             localIsEmpty = local_tiny_worklist.is_empty();
-            tfc = fc; 
-          } while (tfc < MAX_BLOCKS * 4 && localIsEmpty  && atomicCAS(first_count, tfc, tfc + 1) != tfc); 
-          if (tfc < MAX_BLOCKS * 4 && localIsEmpty) {
-            do {
-          //int pos = atomicAdd(processing_vertex, 1);
+            tfc = fc;
+          } while (tfc < MAX_BLOCKS * 4 && localIsEmpty && atomicCAS(first_count, tfc, tfc + 1) != tfc);
+          if (tfc < MAX_BLOCKS * 4 && localIsEmpty)
+          {
+            do
+            {
+              //int pos = atomicAdd(processing_vertex, 1);
               first_vertex = end_vertex - atomicAdd(processing_vertex, ngpus);
               //printf("fv: %d\n", first_vertex);
             } while (first_vertex >= 0 && atomicCAS_system(&isProcessed[first_vertex], 0, 1) == 1);
-          /*if (pos < assignedVerticesSize) {
+            /*if (pos < assignedVerticesSize) {
               //printf("%d\n", first_vertex);
 	      atomicAdd(global_count, 1);
               //printf("%d/%d\n", pos, assignedVerticesSize);
@@ -1473,52 +1705,67 @@ __launch_bounds__(32 * WARP_PER_SM, 1) __global__
               first_vertex = -1;
               atomicExch(&pvLarge, 1);
             }*/
-            if (first_vertex >= 0) {
+            if (first_vertex >= 0)
+            {
               atomicAdd(global_count, 1);
-            } else {
+            }
+            else
+            {
               //printf("pvLarge\n");
               atomicExch(&pvLarge, 1);
-              do {
+              do
+              {
                 first_vertex = atomicAdd(&processed, 1);
               } while (first_vertex <= end_vertex && atomicCAS_system(&isProcessed[first_vertex], 0, 1) == 1);
-              if (first_vertex <= end_vertex) {
+              if (first_vertex <= end_vertex)
+              {
                 atomicAdd(global_count, 1);
                 //printf("%d\n", first_vertex);
-              } else {
+              }
+              else
+              {
                 //printf("allprocessed\n");
                 atomicExch(&allProcessed, 1);
               }
             }
-            if (first_vertex < 0 || first_vertex > end_vertex) {
+            if (first_vertex < 0 || first_vertex > end_vertex)
+            {
               atomicAdd(first_count, -1);
               //printf("fc: %d\n", fc);
             }
           }
         }
         first_vertex = get_value_from_lane_x(first_vertex);
-        if (first_vertex >= 0 && first_vertex <= end_vertex) {
+        if (first_vertex >= 0 && first_vertex <= end_vertex)
+        {
           //if(get_lane_id() == 0)printf("fv: %d\n", first_vertex);
           LongTask lt(first_vertex, -1);
           //if (global_large_worklist -> get_work_num() < LARGE_WORKLIST_THRESHOLD) {
-          //  IterFinderWithMultipleVertex(graph, warp_buffer, worklist_system, 
+          //  IterFinderWithMultipleVertex(graph, warp_buffer, worklist_system,
           //                             lt, local_mb_counter, system_count);
           //} else {
-          bool isLarge = IterFinderWithMultipleVertex(graph, warp_buffer, global_large_worklist, 
-                                       lt, local_mb_counter, large_count);
+          bool isLarge = IterFinderWithMultipleVertex(graph, warp_buffer, global_large_worklist,
+                                                      lt, local_mb_counter, large_count);
           //}
-          if (get_lane_id() == 0 && !isLarge) {
-            atomicAdd(first_count, -1); 
+          if (get_lane_id() == 0 && !isLarge)
+          {
+            atomicAdd(first_count, -1);
             //printf("fc: %d\n", fc);
           }
-          lgc ++;
+          lgc++;
         }
-      } else {
-        if(get_lane_id() == 0) {
-          if (ltc > 0) {
+      }
+      else
+      {
+        if (get_lane_id() == 0)
+        {
+          if (ltc > 0)
+          {
             atomicAdd(tiny_count, -ltc);
             ltc = 0;
           }
-          if (lgc > 0) {
+          if (lgc > 0)
+          {
             atomicAdd(global_count, -lgc);
             lgc = 0;
           }
@@ -1531,23 +1778,24 @@ __launch_bounds__(32 * WARP_PER_SM, 1) __global__
     }
   }
   __syncthreads();
-  if (get_lane_id() == 0 && local_mb_counter != 0)  
+  if (get_lane_id() == 0 && local_mb_counter != 0)
   {
     atomicAdd(maximal_bicliques, local_mb_counter);
   }
 }
 
-
-IterFinderGpu7::IterFinderGpu7(CSRBiGraph *graph_in, int ngpus_) : IterFinderGpu(graph_in) {
+IterFinderGpu7::IterFinderGpu7(CSRBiGraph *graph_in, int ngpus_) : IterFinderGpu(graph_in)
+{
   graph_gpu_ = graph_in;
   vsize = graph_in->V_size;
   int noGpus = 0;
   gpuErrchk(cudaGetDeviceCount(&noGpus));
   ngpus = std::min(noGpus, ngpus_);
-  verticesEachGpu = (vsize + ngpus) / ngpus; 
+  verticesEachGpu = (vsize + ngpus) / ngpus;
 }
 
-IterFinderGpu7::~IterFinderGpu7() {
+IterFinderGpu7::~IterFinderGpu7()
+{
   graph_gpu_->Reset();
   delete graph_gpu_;
   gpuErrchk(cudaFree(dev_global_buffer_));
@@ -1555,13 +1803,14 @@ IterFinderGpu7::~IterFinderGpu7() {
   gpuErrchk(cudaFree(dev_processing_vertex_));
 }
 
-void IterFinderGpu7::Execute() {
+void IterFinderGpu7::Execute()
+{
   const int LargeSize = LARGE_WORKLIST_SIZE / ngpus;
   //printf("large worklist size: %d local tiny size: %d\n", LARGE_WORKLIST_SIZE, LOCAL_TINY_WORKLIST_SIZE);
   cudaStream_t streams[ngpus];
-  std::vector<cudaEvent_t>start_events(ngpus);
-  std::vector<cudaEvent_t>preProcess_events(ngpus);
-  std::vector<cudaEvent_t>end_events(ngpus);
+  std::vector<cudaEvent_t> start_events(ngpus);
+  std::vector<cudaEvent_t> preProcess_events(ngpus);
+  std::vector<cudaEvent_t> end_events(ngpus);
   WorkList<LargeTask> *global_large_worklist[ngpus];
   WorkList<LargeTask> large_worklist[ngpus];
   unsigned long long *global_count[ngpus];
@@ -1576,28 +1825,32 @@ void IterFinderGpu7::Execute() {
   cudaMallocHost(&host_processing_vertex, ngpus * sizeof(int));
   LargeTask *large_worklist_ptr[ngpus];
   LargeTask *lts[ngpus];
-  for (int gid = 0; gid < ngpus; gid++) {
+  for (int gid = 0; gid < ngpus; gid++)
+  {
     gpuErrchk(cudaMallocHost(&lts[gid], LARGE_WORKLIST_SIZE * sizeof(LargeTask)));
-    for (int i = 0; i < LARGE_WORKLIST_SIZE; i++) {
+    for (int i = 0; i < LARGE_WORKLIST_SIZE; i++)
+    {
       lts[gid][i] = LargeTask();
     }
   }
-  
+
   size_t g_size = (size_t)MAX_BLOCKS * BUFFER_PER_BLOCK_2;
-  
+
   int *isProcessed;
   cudaMallocManaged(&isProcessed, sizeof(int) * vsize);
-  for (int i = 0; i < vsize; i++) {
+  for (int i = 0; i < vsize; i++)
+  {
     isProcessed[i] = 0;
-  } 
- 
-//init shared_worklist 
+  }
+
+  //init shared_worklist
   int *cost;
   cudaMallocManaged(&cost, sizeof(int) * vsize);
 
-  CSRBiGraph *graph_gpu[ngpus]; 
- 
-  for (int i = 0; i < ngpus; i++) {
+  CSRBiGraph *graph_gpu[ngpus];
+
+  for (int i = 0; i < ngpus; i++)
+  {
     cudaSetDevice(i);
     graph_gpu[i] = new CSRBiGraph();
     graph_gpu[i]->CopyToGpu(*graph_gpu_);
@@ -1615,19 +1868,20 @@ void IterFinderGpu7::Execute() {
     gpuErrchk(cudaMalloc((void **)&global_large_worklist[i], sizeof(WorkList<LargeTask>)));
     gpuErrchk(cudaMalloc((void **)&local_global_buffer[i], g_size * sizeof(int)));
     large_worklist[i].Init(large_worklist_ptr[i], LargeSize, false);
-    
+
     gpuErrchk(cudaStreamCreate(&streams[i]));
     gpuErrchk(cudaEventCreate(&start_events[i]));
     gpuErrchk(cudaEventCreate(&preProcess_events[i]));
     gpuErrchk(cudaEventCreate(&end_events[i]));
   }
-  
+
   start_time_ = get_cur_time();
 
-  for (int gid = 0; gid < ngpus; gid++) {
+  for (int gid = 0; gid < ngpus; gid++)
+  {
     gpuErrchk(cudaSetDevice(gid));
     gpuErrchk(cudaEventRecord(start_events[gid], streams[gid]))
-    gpuErrchk(cudaMemcpyAsync(large_worklist_ptr[gid], lts[gid], LargeSize * sizeof(LargeTask), cudaMemcpyHostToDevice, streams[gid]));
+        gpuErrchk(cudaMemcpyAsync(large_worklist_ptr[gid], lts[gid], LargeSize * sizeof(LargeTask), cudaMemcpyHostToDevice, streams[gid]));
     gpuErrchk(cudaMemcpyAsync(global_large_worklist[gid], &large_worklist[gid], sizeof(WorkList<LargeTask>), cudaMemcpyHostToDevice, streams[gid]));
     gpuErrchk(cudaMemsetAsync(global_count[gid], 0, sizeof(unsigned long long), streams[gid]));
     gpuErrchk(cudaMemsetAsync(large_count[gid], 0, sizeof(unsigned long long), streams[gid]));
@@ -1637,43 +1891,46 @@ void IterFinderGpu7::Execute() {
     gpuErrchk(cudaMemcpyAsync(local_processing_vertex[gid], &host_processing_vertex[gid], sizeof(int), cudaMemcpyHostToDevice, streams[gid]));
     gpuErrchk(cudaMemsetAsync(local_global_buffer[gid], 0, g_size * sizeof(int), streams[gid]));
     IterFinderKernel_7<<<MAX_BLOCKS, WARP_PER_BLOCK * 32, 0, streams[gid]>>>(
-      *graph_gpu[gid], local_global_buffer[gid], local_mb[gid], local_processing_vertex[gid], 
-      end_vertex[gid], global_large_worklist[gid],   
-      global_count[gid], large_count[gid], tiny_count[gid], first_count[gid], isProcessed, ngpus);
+        *graph_gpu[gid], local_global_buffer[gid], local_mb[gid], local_processing_vertex[gid],
+        end_vertex[gid], global_large_worklist[gid],
+        global_count[gid], large_count[gid], tiny_count[gid], first_count[gid], isProcessed, ngpus);
     gpuErrchk(cudaMemcpyAsync(&all_mb[gid], local_mb[gid], sizeof(int), cudaMemcpyDeviceToHost, streams[gid]))
-    gpuErrchk(cudaEventRecord(end_events[gid], streams[gid]))
-
+        gpuErrchk(cudaEventRecord(end_events[gid], streams[gid]))
   }
 
-  for (int gid = 0; gid < ngpus; gid++) {
+  for (int gid = 0; gid < ngpus; gid++)
+  {
     gpuErrchk(cudaStreamSynchronize(streams[gid]));
     float time;
     cudaEventElapsedTime(&time, start_events[gid], end_events[gid]);
-    std::cout<<"Processing time of gpu "<<gid<<": "<<time/1000<<"s"<<std::endl;
+    std::cout << "Processing time of gpu " << gid << ": " << time / 1000 << "s" << std::endl;
     gpuErrchk(cudaStreamDestroy(streams[gid]));
   }
   maximal_nodes_ = 0;
-  for (int i = 0; i < ngpus; i++) {
-    std::cout<<"gpu "<<i<<": "<<all_mb[i]<<std::endl;
+  for (int i = 0; i < ngpus; i++)
+  {
+    std::cout << "gpu " << i << ": " << all_mb[i] << std::endl;
     maximal_nodes_ += all_mb[i];
   }
   exe_time_ = get_cur_time() - start_time_;
 }
 
 __launch_bounds__(32 * WARP_PER_SM, 1) __global__
-    void IterFinderKernel_8(CSRBiGraph graph, int *global_buffer, 
-                            unsigned long long *maximal_bicliques, 
-                            WorkList<LargeTask> *global_large_worklist, 
-                            unsigned long long *global_count, 
-                            unsigned long long *large_count, unsigned long long *tiny_count, unsigned long long *first_count, 
-                            int *isProcessed, int ngpus, int channel_num) {
+    void IterFinderKernel_8(CSRBiGraph graph, int *global_buffer,
+                            unsigned long long *maximal_bicliques,
+                            WorkList<LargeTask> *global_large_worklist,
+                            unsigned long long *global_count,
+                            unsigned long long *large_count, unsigned long long *tiny_count, unsigned long long *first_count,
+                            int *isProcessed, int ngpus, int channel_num)
+{
   int warp_id = (blockIdx.x * blockDim.x + threadIdx.x) / warpSize;
   int *warp_buffer = global_buffer + (size_t)BUFFER_PER_WARP_2 * warp_id +
                      (size_t)SD_BUFFER_PER_BLOCK * (blockIdx.x + 1);
   int local_mb_counter = 0;
 
   __shared__ TinyTask local_tiny_worklist_ptr[LOCAL_TINY_WORKLIST_SIZE];
-  for (int i = threadIdx.x; i < LOCAL_TINY_WORKLIST_SIZE; i += blockDim.x) {
+  for (int i = threadIdx.x; i < LOCAL_TINY_WORKLIST_SIZE; i += blockDim.x)
+  {
     local_tiny_worklist_ptr[i].Init();
   }
   TinyTask *tiny_buffer = (TinyTask *)warp_buffer;
@@ -1688,7 +1945,8 @@ __launch_bounds__(32 * WARP_PER_SM, 1) __global__
   __shared__ int allProcessed;
   __shared__ int processed;
   __shared__ int processing_vertex;
-  if (threadIdx.x == 0) {
+  if (threadIdx.x == 0)
+  {
     local_tiny_worklist.Init(local_tiny_worklist_ptr, LOCAL_TINY_WORKLIST_SIZE);
     allProcessed = 0;
     processed = 0;
@@ -1699,97 +1957,126 @@ __launch_bounds__(32 * WARP_PER_SM, 1) __global__
 
   __threadfence_block();
   __syncthreads();
-  
-  if (threadIdx.x / warpSize < 1) {
+
+  if (threadIdx.x / warpSize < 1)
+  {
     int channel = 0;
-    while (true) {
+    while (true)
+    {
       __syncwarp();
-      if (!ap && pv >= graph.V_size) {
-        if (get_lane_id() == 0) {
-          while (channel < channel_num && atomicCAS_system(&isProcessed[channel], 0, 1) == 1) {
+      if (!ap && pv >= graph.V_size)
+      {
+        if (get_lane_id() == 0)
+        {
+          while (channel < channel_num && atomicCAS_system(&isProcessed[channel], 0, 1) == 1)
+          {
             channel++;
           }
-          if (channel < channel_num) {
+          if (channel < channel_num)
+          {
             atomicExch(&processing_vertex, graph.V_size - 1 - channel);
-          } else {
+          }
+          else
+          {
             //printf("%d\n", blockIdx.x);
             atomicExch(&allProcessed, 1);
           }
         }
       }
       __syncwarp();
-      if (global_large_worklist->get_work_num() > 0) {
+      if (global_large_worklist->get_work_num() > 0)
+      {
         LargeTask lt;
         size_t get_num = global_large_worklist->get(lt);
-        if (get_num <= 0) continue;
+        if (get_num <= 0)
+          continue;
         int twn_p = LargeToTiny(graph, warp_buffer, lt, tiny_buffer);
-        if (get_lane_id() == 0) {
+        if (get_lane_id() == 0)
+        {
           atomicAdd(tiny_count, twn_p);
         }
         int pushed = 0;
-        while (pushed < twn_p) {
+        while (pushed < twn_p)
+        {
           __syncwarp();
-          if (local_tiny_worklist.get_work_num() < LOCAL_TINY_WORKLIST_THRESHOLD) {
-            size_t pushing = local_tiny_worklist.push_works(tiny_buffer + pushed, 
+          if (local_tiny_worklist.get_work_num() < LOCAL_TINY_WORKLIST_THRESHOLD)
+          {
+            size_t pushing = local_tiny_worklist.push_works(tiny_buffer + pushed,
                                                             twn_p - pushed);
             pushed += pushing;
           }
         }
-        llc ++;
+        llc++;
         continue;
       }
-      __syncwarp(); 
-      if (pv >= graph.V_size && ap == 1) {
-        if (get_lane_id() == 0) {
-          if (llc > 0) {
+      __syncwarp();
+      if (pv >= graph.V_size && ap == 1)
+      {
+        if (get_lane_id() == 0)
+        {
+          if (llc > 0)
+          {
             atomicAdd(large_count, -llc);
             //printf("%d %lld %lld %lld\n",blockIdx.x, gc, lc, tc);
             llc = 0;
           }
         }
         __syncwarp();
-        if (gc == 0 && lc == 0 && tc == 0)break;
+        if (gc == 0 && lc == 0 && tc == 0)
+          break;
       }
     }
-  } 
+  }
   else
   {
     int first_vertex = graph.V_size;
     int lgc = 0;
-    while (true) {
+    while (true)
+    {
       __syncwarp();
-      if (!local_tiny_worklist.is_empty()) {
+      if (!local_tiny_worklist.is_empty())
+      {
         TinyTask tt;
-        if (local_tiny_worklist.get(tt)) {
-          IterFinderWithMultipleVertex(graph, warp_buffer, global_large_worklist, 
+        if (local_tiny_worklist.get(tt))
+        {
+          IterFinderWithMultipleVertex(graph, warp_buffer, global_large_worklist,
                                        tt, local_mb_counter, large_count);
           ltc++;
           continue;
         }
       }
       __syncwarp();
-      if (pv < graph.V_size) {
-        if (get_lane_id() == 0) {
+      if (pv < graph.V_size)
+      {
+        if (get_lane_id() == 0)
+        {
           first_vertex = atomicAdd(&processing_vertex, -channel_num);
-          if (first_vertex >= 0 && first_vertex  < graph.V_size) {
+          if (first_vertex >= 0 && first_vertex < graph.V_size)
+          {
             atomicAdd(global_count, 1);
             //printf("%d\n", first_vertex);
           }
         }
         first_vertex = get_value_from_lane_x(first_vertex);
-        if (first_vertex >= 0 && first_vertex < graph.V_size) {
+        if (first_vertex >= 0 && first_vertex < graph.V_size)
+        {
           LongTask lt(first_vertex, -1);
-          bool isLarge = IterFinderWithMultipleVertex(graph, warp_buffer, global_large_worklist, 
-                                       lt, local_mb_counter, large_count);
-          lgc ++;
+          bool isLarge = IterFinderWithMultipleVertex(graph, warp_buffer, global_large_worklist,
+                                                      lt, local_mb_counter, large_count);
+          lgc++;
         }
-      } else if (ap == 1){
-        if(get_lane_id() == 0) {
-          if (ltc > 0) {
+      }
+      else if (ap == 1)
+      {
+        if (get_lane_id() == 0)
+        {
+          if (ltc > 0)
+          {
             atomicAdd(tiny_count, -ltc);
             ltc = 0;
           }
-          if (lgc > 0) {
+          if (lgc > 0)
+          {
             atomicAdd(global_count, -lgc);
             lgc = 0;
           }
@@ -1801,13 +2088,14 @@ __launch_bounds__(32 * WARP_PER_SM, 1) __global__
     }
   }
   __syncthreads();
-  if (get_lane_id() == 0 && local_mb_counter != 0)  
+  if (get_lane_id() == 0 && local_mb_counter != 0)
   {
     atomicAdd_system(maximal_bicliques, local_mb_counter);
   }
 }
 
-IterFinderGpu8::IterFinderGpu8(CSRBiGraph *graph_in, int ngpus_, int alpha) : IterFinderGpu(graph_in) {
+IterFinderGpu8::IterFinderGpu8(CSRBiGraph *graph_in, int ngpus_, int alpha) : IterFinderGpu(graph_in)
+{
   graph_gpu_ = graph_in;
   vsize = graph_in->V_size;
   int noGpus = 0;
@@ -1816,7 +2104,8 @@ IterFinderGpu8::IterFinderGpu8(CSRBiGraph *graph_in, int ngpus_, int alpha) : It
   task_channel_ = alpha * MAX_SM * ngpus;
 }
 
-IterFinderGpu8::~IterFinderGpu8() {
+IterFinderGpu8::~IterFinderGpu8()
+{
   graph_gpu_->Reset();
   delete graph_gpu_;
   gpuErrchk(cudaFree(dev_global_buffer_));
@@ -1824,13 +2113,14 @@ IterFinderGpu8::~IterFinderGpu8() {
   gpuErrchk(cudaFree(dev_processing_vertex_));
 }
 
-void IterFinderGpu8::Execute() {
+void IterFinderGpu8::Execute()
+{
   const int LargeSize = LARGE_WORKLIST_SIZE / ngpus;
   //printf("large worklist size: %d local tiny size: %d\n", LARGE_WORKLIST_SIZE, LOCAL_TINY_WORKLIST_SIZE);
   cudaStream_t streams[ngpus];
-  std::vector<cudaEvent_t>start_events(ngpus);
-  std::vector<cudaEvent_t>preProcess_events(ngpus);
-  std::vector<cudaEvent_t>end_events(ngpus);
+  std::vector<cudaEvent_t> start_events(ngpus);
+  std::vector<cudaEvent_t> preProcess_events(ngpus);
+  std::vector<cudaEvent_t> end_events(ngpus);
   WorkList<LargeTask> *global_large_worklist[ngpus];
   WorkList<LargeTask> large_worklist[ngpus];
   unsigned long long *global_count[ngpus];
@@ -1845,28 +2135,32 @@ void IterFinderGpu8::Execute() {
   cudaMallocHost(&host_processing_vertex, ngpus * sizeof(int));
   LargeTask *large_worklist_ptr[ngpus];
   LargeTask *lts[ngpus];
-  for (int gid = 0; gid < ngpus; gid++) {
+  for (int gid = 0; gid < ngpus; gid++)
+  {
     gpuErrchk(cudaMallocHost(&lts[gid], LARGE_WORKLIST_SIZE * sizeof(LargeTask)));
-    for (int i = 0; i < LARGE_WORKLIST_SIZE; i++) {
+    for (int i = 0; i < LARGE_WORKLIST_SIZE; i++)
+    {
       lts[gid][i] = LargeTask();
     }
   }
-  
+
   size_t g_size = (size_t)MAX_BLOCKS * BUFFER_PER_BLOCK_2;
-  
+
   int *isProcessed;
   cudaMallocManaged(&isProcessed, sizeof(int) * task_channel_);
-  for (int i = 0; i < task_channel_; i++) {
+  for (int i = 0; i < task_channel_; i++)
+  {
     isProcessed[i] = 0;
-  } 
- 
-//init shared_worklist 
+  }
+
+  //init shared_worklist
   int *cost;
   cudaMallocManaged(&cost, sizeof(int) * vsize);
 
-  CSRBiGraph *graph_gpu[ngpus]; 
- 
-  for (int i = 0; i < ngpus; i++) {
+  CSRBiGraph *graph_gpu[ngpus];
+
+  for (int i = 0; i < ngpus; i++)
+  {
     cudaSetDevice(i);
     graph_gpu[i] = new CSRBiGraph();
     graph_gpu[i]->CopyToGpu(*graph_gpu_);
@@ -1884,19 +2178,20 @@ void IterFinderGpu8::Execute() {
     gpuErrchk(cudaMalloc((void **)&global_large_worklist[i], sizeof(WorkList<LargeTask>)));
     gpuErrchk(cudaMalloc((void **)&local_global_buffer[i], g_size * sizeof(int)));
     large_worklist[i].Init(large_worklist_ptr[i], LargeSize, false);
-    
+
     gpuErrchk(cudaStreamCreate(&streams[i]));
     gpuErrchk(cudaEventCreate(&start_events[i]));
     gpuErrchk(cudaEventCreate(&preProcess_events[i]));
     gpuErrchk(cudaEventCreate(&end_events[i]));
   }
-  
+
   start_time_ = get_cur_time();
 
-  for (int gid = 0; gid < ngpus; gid++) {
+  for (int gid = 0; gid < ngpus; gid++)
+  {
     gpuErrchk(cudaSetDevice(gid));
     gpuErrchk(cudaEventRecord(start_events[gid], streams[gid]))
-    gpuErrchk(cudaMemcpyAsync(large_worklist_ptr[gid], lts[gid], LargeSize * sizeof(LargeTask), cudaMemcpyHostToDevice, streams[gid]));
+        gpuErrchk(cudaMemcpyAsync(large_worklist_ptr[gid], lts[gid], LargeSize * sizeof(LargeTask), cudaMemcpyHostToDevice, streams[gid]));
     gpuErrchk(cudaMemcpyAsync(global_large_worklist[gid], &large_worklist[gid], sizeof(WorkList<LargeTask>), cudaMemcpyHostToDevice, streams[gid]));
     gpuErrchk(cudaMemsetAsync(global_count[gid], 0, sizeof(unsigned long long), streams[gid]));
     gpuErrchk(cudaMemsetAsync(large_count[gid], 0, sizeof(unsigned long long), streams[gid]));
@@ -1906,43 +2201,46 @@ void IterFinderGpu8::Execute() {
     gpuErrchk(cudaMemcpyAsync(local_processing_vertex[gid], &host_processing_vertex[gid], sizeof(int), cudaMemcpyHostToDevice, streams[gid]));
     gpuErrchk(cudaMemsetAsync(local_global_buffer[gid], 0, g_size * sizeof(int), streams[gid]));
     IterFinderKernel_8<<<MAX_BLOCKS, WARP_PER_BLOCK * 32, 0, streams[gid]>>>(
-      *graph_gpu[gid], local_global_buffer[gid], local_mb[gid], 
-      global_large_worklist[gid],   
-      global_count[gid], large_count[gid], tiny_count[gid], first_count[gid], isProcessed, ngpus, task_channel_);
+        *graph_gpu[gid], local_global_buffer[gid], local_mb[gid],
+        global_large_worklist[gid],
+        global_count[gid], large_count[gid], tiny_count[gid], first_count[gid], isProcessed, ngpus, task_channel_);
     gpuErrchk(cudaMemcpyAsync(&all_mb[gid], local_mb[gid], sizeof(int), cudaMemcpyDeviceToHost, streams[gid]))
-    gpuErrchk(cudaEventRecord(end_events[gid], streams[gid]))
-
+        gpuErrchk(cudaEventRecord(end_events[gid], streams[gid]))
   }
 
-  for (int gid = 0; gid < ngpus; gid++) {
+  for (int gid = 0; gid < ngpus; gid++)
+  {
     gpuErrchk(cudaStreamSynchronize(streams[gid]));
     float time;
     cudaEventElapsedTime(&time, start_events[gid], end_events[gid]);
-    std::cout<<"Processing time of gpu "<<gid<<": "<<time/1000<<"s"<<std::endl;
+    std::cout << "Processing time of gpu " << gid << ": " << time / 1000 << "s" << std::endl;
     gpuErrchk(cudaStreamDestroy(streams[gid]));
   }
   maximal_nodes_ = 0;
-  for (int i = 0; i < ngpus; i++) {
-    std::cout<<"gpu "<<i<<": "<<all_mb[i]<<std::endl;
+  for (int i = 0; i < ngpus; i++)
+  {
+    std::cout << "gpu " << i << ": " << all_mb[i] << std::endl;
     maximal_nodes_ += all_mb[i];
   }
   exe_time_ = get_cur_time() - start_time_;
 }
 
 __launch_bounds__(32 * WARP_PER_SM, 1) __global__
-    void IterFinderKernel_9(CSRBiGraph graph, int *global_buffer, 
-                            unsigned long long *maximal_bicliques, int *processing_vertex, int start_vertex,  int end_vertex,
-                            WorkList<LargeTask> *global_large_worklist, 
-                            unsigned long long *global_count, 
-                            unsigned long long *large_count, unsigned long long *tiny_count, unsigned long long *first_count, 
-                            int *isProcessed, int ngpus) {
+    void IterFinderKernel_9(CSRBiGraph graph, int *global_buffer,
+                            unsigned long long *maximal_bicliques, int *processing_vertex, int start_vertex, int end_vertex,
+                            WorkList<LargeTask> *global_large_worklist,
+                            unsigned long long *global_count,
+                            unsigned long long *large_count, unsigned long long *tiny_count, unsigned long long *first_count,
+                            int *isProcessed, int ngpus)
+{
   int warp_id = (blockIdx.x * blockDim.x + threadIdx.x) / warpSize;
   int *warp_buffer = global_buffer + (size_t)BUFFER_PER_WARP_2 * warp_id +
                      (size_t)SD_BUFFER_PER_BLOCK * (blockIdx.x + 1);
   int local_mb_counter = 0;
 
   __shared__ TinyTask local_tiny_worklist_ptr[LOCAL_TINY_WORKLIST_SIZE];
-  for (int i = threadIdx.x; i < LOCAL_TINY_WORKLIST_SIZE; i += blockDim.x) {
+  for (int i = threadIdx.x; i < LOCAL_TINY_WORKLIST_SIZE; i += blockDim.x)
+  {
     local_tiny_worklist_ptr[i].Init();
   }
   TinyTask *tiny_buffer = (TinyTask *)warp_buffer;
@@ -1958,7 +2256,8 @@ __launch_bounds__(32 * WARP_PER_SM, 1) __global__
   __shared__ WorkList<TinyTask> local_tiny_worklist;
   __shared__ int allProcessed;
   __shared__ int processed;
-  if (threadIdx.x == 0) {
+  if (threadIdx.x == 0)
+  {
     local_tiny_worklist.Init(local_tiny_worklist_ptr, LOCAL_TINY_WORKLIST_SIZE);
     pvLarge = 0;
     allProcessed = 0;
@@ -1969,30 +2268,38 @@ __launch_bounds__(32 * WARP_PER_SM, 1) __global__
 
   __threadfence_block();
   __syncthreads();
-  
-  if (threadIdx.x / warpSize < 1) {
-    while (true) {
+
+  if (threadIdx.x / warpSize < 1)
+  {
+    while (true)
+    {
       __syncwarp();
-      if (global_large_worklist->get_work_num() > 0) {
+      if (global_large_worklist->get_work_num() > 0)
+      {
         LargeTask lt;
         size_t get_num = global_large_worklist->get(lt);
-        if (get_num <= 0) continue;
+        if (get_num <= 0)
+          continue;
         int twn_p = LargeToTiny(graph, warp_buffer, lt, tiny_buffer);
-        if (get_lane_id() == 0) {
+        if (get_lane_id() == 0)
+        {
           atomicAdd(tiny_count, twn_p);
         }
         int pushed = 0;
-        while (pushed < twn_p) {
+        while (pushed < twn_p)
+        {
           __syncwarp();
-          if (local_tiny_worklist.get_work_num() < LOCAL_TINY_WORKLIST_THRESHOLD) {
-            size_t pushing = local_tiny_worklist.push_works(tiny_buffer + pushed, 
+          if (local_tiny_worklist.get_work_num() < LOCAL_TINY_WORKLIST_THRESHOLD)
+          {
+            size_t pushing = local_tiny_worklist.push_works(tiny_buffer + pushed,
                                                             twn_p - pushed);
             pushed += pushing;
           }
         }
-        llc ++;
-        if (get_lane_id() == 0 && lt.vertices[1] == -1) {
-          atomicAdd(first_count , -1);
+        llc++;
+        if (get_lane_id() == 0 && lt.vertices[1] == -1)
+        {
+          atomicAdd(first_count, -1);
           //printf("fc: %lld\n", fc);
         }
         continue;
@@ -2017,32 +2324,39 @@ __launch_bounds__(32 * WARP_PER_SM, 1) __global__
         lsc ++;
         continue;
       }*/
-      if (volpvLarge == 1 && ap == 1) {
-        if (get_lane_id() == 0) {
-          if (llc > 0) {
+      if (volpvLarge == 1 && ap == 1)
+      {
+        if (get_lane_id() == 0)
+        {
+          if (llc > 0)
+          {
             atomicAdd(large_count, -llc);
             llc = 0;
           }
         }
-	//if (get_lane_id() == 0)printf("%d %d %d %d\n", gc, lc, tc, test); 
-        if (gc == 0 && lc == 0 && tc == 0)break;
+        //if (get_lane_id() == 0)printf("%d %d %d %d\n", gc, lc, tc, test);
+        if (gc == 0 && lc == 0 && tc == 0)
+          break;
       }
     }
-  } 
+  }
   else
   {
     int first_vertex = end_vertex;
     int lgc = 0;
-    while (true) {
+    while (true)
+    {
       __syncwarp();
-      if (!local_tiny_worklist.is_empty()) {
+      if (!local_tiny_worklist.is_empty())
+      {
         TinyTask tt;
-        if (local_tiny_worklist.get(tt)) {
+        if (local_tiny_worklist.get(tt))
+        {
           //if (global_large_worklist -> get_work_num() < LARGE_WORKLIST_THRESHOLD) {
-          //  IterFinderWithMultipleVertex(graph, warp_buffer, worklist_system, 
+          //  IterFinderWithMultipleVertex(graph, warp_buffer, worklist_system,
           //                             tt, local_mb_counter, system_count);
           //} else {
-          IterFinderWithMultipleVertex(graph, warp_buffer, global_large_worklist, 
+          IterFinderWithMultipleVertex(graph, warp_buffer, global_large_worklist,
                                        tt, local_mb_counter, large_count);
           //}
           ltc++;
@@ -2050,54 +2364,69 @@ __launch_bounds__(32 * WARP_PER_SM, 1) __global__
         }
       }
       __syncwarp();
-      if (volpvLarge == 0 || ap == 0) {
-        //if (global_large_worklist -> get_work_num() > 0) continue; 
-        if (get_lane_id() == 0) {
+      if (volpvLarge == 0 || ap == 0)
+      {
+        //if (global_large_worklist -> get_work_num() > 0) continue;
+        if (get_lane_id() == 0)
+        {
           first_vertex = -1;
           int tfc;
           bool localIsEmpty;
-          do {
+          do
+          {
             localIsEmpty = local_tiny_worklist.is_empty();
-            tfc = fc; 
-          } while (tfc < MAX_BLOCKS * 4 && localIsEmpty  && atomicCAS(first_count, tfc, tfc + 1) != tfc); 
-          if (tfc < MAX_BLOCKS * 4 && localIsEmpty) {
+            tfc = fc;
+          } while (tfc < MAX_BLOCKS * 4 && localIsEmpty && atomicCAS(first_count, tfc, tfc + 1) != tfc);
+          if (tfc < MAX_BLOCKS * 4 && localIsEmpty)
+          {
             first_vertex = end_vertex - atomicAdd(processing_vertex, 1);
-            if (first_vertex >= start_vertex) {
+            if (first_vertex >= start_vertex)
+            {
               atomicAdd(global_count, 1);
-            } else {
+            }
+            else
+            {
               atomicExch(&pvLarge, 1);
               atomicExch(&allProcessed, 1);
             }
-            if (first_vertex < start_vertex || first_vertex > end_vertex) {
+            if (first_vertex < start_vertex || first_vertex > end_vertex)
+            {
               atomicAdd(first_count, -1);
               //printf("fc: %d\n", fc);
             }
           }
         }
         first_vertex = get_value_from_lane_x(first_vertex);
-        if (first_vertex >= start_vertex && first_vertex <= end_vertex) {
+        if (first_vertex >= start_vertex && first_vertex <= end_vertex)
+        {
           //if(get_lane_id() == 0)printf("fv: %d\n", first_vertex);
           LongTask lt(first_vertex, -1);
           //if (global_large_worklist -> get_work_num() < LARGE_WORKLIST_THRESHOLD) {
-          //  IterFinderWithMultipleVertex(graph, warp_buffer, worklist_system, 
+          //  IterFinderWithMultipleVertex(graph, warp_buffer, worklist_system,
           //                             lt, local_mb_counter, system_count);
           //} else {
-          bool isLarge = IterFinderWithMultipleVertex(graph, warp_buffer, global_large_worklist, 
-                                       lt, local_mb_counter, large_count);
+          bool isLarge = IterFinderWithMultipleVertex(graph, warp_buffer, global_large_worklist,
+                                                      lt, local_mb_counter, large_count);
           //}
-          if (get_lane_id() == 0 && !isLarge) {
-            atomicAdd(first_count, -1); 
+          if (get_lane_id() == 0 && !isLarge)
+          {
+            atomicAdd(first_count, -1);
             //printf("fc: %d\n", fc);
           }
-          lgc ++;
+          lgc++;
         }
-      } else {
-        if(get_lane_id() == 0) {
-          if (ltc > 0) {
+      }
+      else
+      {
+        if (get_lane_id() == 0)
+        {
+          if (ltc > 0)
+          {
             atomicAdd(tiny_count, -ltc);
             ltc = 0;
           }
-          if (lgc > 0) {
+          if (lgc > 0)
+          {
             atomicAdd(global_count, -lgc);
             lgc = 0;
           }
@@ -2110,21 +2439,23 @@ __launch_bounds__(32 * WARP_PER_SM, 1) __global__
     }
   }
   __syncthreads();
-  if (get_lane_id() == 0 && local_mb_counter != 0)  
+  if (get_lane_id() == 0 && local_mb_counter != 0)
   {
     atomicAdd(maximal_bicliques, local_mb_counter);
   }
 }
-IterFinderGpu9::IterFinderGpu9(CSRBiGraph *graph_in, int ngpus_) : IterFinderGpu(graph_in) {
+IterFinderGpu9::IterFinderGpu9(CSRBiGraph *graph_in, int ngpus_) : IterFinderGpu(graph_in)
+{
   graph_gpu_ = graph_in;
   vsize = graph_in->V_size;
   int noGpus = 0;
   gpuErrchk(cudaGetDeviceCount(&noGpus));
   ngpus = std::min(noGpus, ngpus_);
-  verticesEachGpu = (vsize + ngpus) / ngpus; 
+  verticesEachGpu = (vsize + ngpus) / ngpus;
 }
 
-IterFinderGpu9::~IterFinderGpu9() {
+IterFinderGpu9::~IterFinderGpu9()
+{
   graph_gpu_->Reset();
   delete graph_gpu_;
   gpuErrchk(cudaFree(dev_global_buffer_));
@@ -2132,13 +2463,14 @@ IterFinderGpu9::~IterFinderGpu9() {
   gpuErrchk(cudaFree(dev_processing_vertex_));
 }
 
-void IterFinderGpu9::Execute() {
+void IterFinderGpu9::Execute()
+{
   const int LargeSize = LARGE_WORKLIST_SIZE / ngpus;
   //printf("large worklist size: %d local tiny size: %d\n", LARGE_WORKLIST_SIZE, LOCAL_TINY_WORKLIST_SIZE);
   cudaStream_t streams[ngpus];
-  std::vector<cudaEvent_t>start_events(ngpus);
-  std::vector<cudaEvent_t>preProcess_events(ngpus);
-  std::vector<cudaEvent_t>end_events(ngpus);
+  std::vector<cudaEvent_t> start_events(ngpus);
+  std::vector<cudaEvent_t> preProcess_events(ngpus);
+  std::vector<cudaEvent_t> end_events(ngpus);
   WorkList<LargeTask> *global_large_worklist[ngpus];
   WorkList<LargeTask> large_worklist[ngpus];
   unsigned long long *global_count[ngpus];
@@ -2153,28 +2485,32 @@ void IterFinderGpu9::Execute() {
   cudaMallocHost(&host_processing_vertex, ngpus * sizeof(int));
   LargeTask *large_worklist_ptr[ngpus];
   LargeTask *lts[ngpus];
-  for (int gid = 0; gid < ngpus; gid++) {
+  for (int gid = 0; gid < ngpus; gid++)
+  {
     gpuErrchk(cudaMallocHost(&lts[gid], LARGE_WORKLIST_SIZE * sizeof(LargeTask)));
-    for (int i = 0; i < LARGE_WORKLIST_SIZE; i++) {
+    for (int i = 0; i < LARGE_WORKLIST_SIZE; i++)
+    {
       lts[gid][i] = LargeTask();
     }
   }
-  
+
   size_t g_size = (size_t)MAX_BLOCKS * BUFFER_PER_BLOCK_2;
-  
+
   int *isProcessed;
   cudaMallocManaged(&isProcessed, sizeof(int) * vsize);
-  for (int i = 0; i < vsize; i++) {
+  for (int i = 0; i < vsize; i++)
+  {
     isProcessed[i] = 0;
-  } 
- 
-//init shared_worklist 
+  }
+
+  //init shared_worklist
   int *cost;
   cudaMallocManaged(&cost, sizeof(int) * vsize);
 
-  CSRBiGraph *graph_gpu[ngpus]; 
- 
-  for (int i = 0; i < ngpus; i++) {
+  CSRBiGraph *graph_gpu[ngpus];
+
+  for (int i = 0; i < ngpus; i++)
+  {
     cudaSetDevice(i);
     graph_gpu[i] = new CSRBiGraph();
     graph_gpu[i]->CopyToGpu(*graph_gpu_);
@@ -2192,19 +2528,20 @@ void IterFinderGpu9::Execute() {
     gpuErrchk(cudaMalloc((void **)&global_large_worklist[i], sizeof(WorkList<LargeTask>)));
     gpuErrchk(cudaMalloc((void **)&local_global_buffer[i], g_size * sizeof(int)));
     large_worklist[i].Init(large_worklist_ptr[i], LargeSize, false);
-    
+
     gpuErrchk(cudaStreamCreate(&streams[i]));
     gpuErrchk(cudaEventCreate(&start_events[i]));
     gpuErrchk(cudaEventCreate(&preProcess_events[i]));
     gpuErrchk(cudaEventCreate(&end_events[i]));
   }
-  
+
   start_time_ = get_cur_time();
 
-  for (int gid = 0; gid < ngpus; gid++) {
+  for (int gid = 0; gid < ngpus; gid++)
+  {
     gpuErrchk(cudaSetDevice(gid));
     gpuErrchk(cudaEventRecord(start_events[gid], streams[gid]))
-    gpuErrchk(cudaMemcpyAsync(large_worklist_ptr[gid], lts[gid], LargeSize * sizeof(LargeTask), cudaMemcpyHostToDevice, streams[gid]));
+        gpuErrchk(cudaMemcpyAsync(large_worklist_ptr[gid], lts[gid], LargeSize * sizeof(LargeTask), cudaMemcpyHostToDevice, streams[gid]));
     gpuErrchk(cudaMemcpyAsync(global_large_worklist[gid], &large_worklist[gid], sizeof(WorkList<LargeTask>), cudaMemcpyHostToDevice, streams[gid]));
     gpuErrchk(cudaMemsetAsync(global_count[gid], 0, sizeof(unsigned long long), streams[gid]));
     gpuErrchk(cudaMemsetAsync(large_count[gid], 0, sizeof(unsigned long long), streams[gid]));
@@ -2214,47 +2551,51 @@ void IterFinderGpu9::Execute() {
     gpuErrchk(cudaMemcpyAsync(local_processing_vertex[gid], &host_processing_vertex[gid], sizeof(int), cudaMemcpyHostToDevice, streams[gid]));
     gpuErrchk(cudaMemsetAsync(local_global_buffer[gid], 0, g_size * sizeof(int), streams[gid]));
     int start_vertex = 0;
-    if (gid > 0) {
+    if (gid > 0)
+    {
       start_vertex = end_vertex[gid - 1] + 1;
     }
     IterFinderKernel_9<<<MAX_BLOCKS, WARP_PER_BLOCK * 32, 0, streams[gid]>>>(
-      *graph_gpu[gid], local_global_buffer[gid], local_mb[gid], local_processing_vertex[gid], start_vertex, 
-      end_vertex[gid], global_large_worklist[gid],   
-      global_count[gid], large_count[gid], tiny_count[gid], first_count[gid], isProcessed, ngpus);
+        *graph_gpu[gid], local_global_buffer[gid], local_mb[gid], local_processing_vertex[gid], start_vertex,
+        end_vertex[gid], global_large_worklist[gid],
+        global_count[gid], large_count[gid], tiny_count[gid], first_count[gid], isProcessed, ngpus);
     gpuErrchk(cudaMemcpyAsync(&all_mb[gid], local_mb[gid], sizeof(int), cudaMemcpyDeviceToHost, streams[gid]))
-    gpuErrchk(cudaEventRecord(end_events[gid], streams[gid]))
-
+        gpuErrchk(cudaEventRecord(end_events[gid], streams[gid]))
   }
 
-  for (int gid = 0; gid < ngpus; gid++) {
+  for (int gid = 0; gid < ngpus; gid++)
+  {
     gpuErrchk(cudaStreamSynchronize(streams[gid]));
     float time;
     cudaEventElapsedTime(&time, start_events[gid], end_events[gid]);
-    std::cout<<"Processing time of gpu "<<gid<<": "<<time/1000<<"s"<<std::endl;
+    std::cout << "Processing time of gpu " << gid << ": " << time / 1000 << "s" << std::endl;
     gpuErrchk(cudaStreamDestroy(streams[gid]));
   }
   maximal_nodes_ = 0;
-  for (int i = 0; i < ngpus; i++) {
-    std::cout<<"gpu "<<i<<": "<<all_mb[i]<<std::endl;
+  for (int i = 0; i < ngpus; i++)
+  {
+    std::cout << "gpu " << i << ": " << all_mb[i] << std::endl;
     maximal_nodes_ += all_mb[i];
   }
   exe_time_ = get_cur_time() - start_time_;
 }
 
 __launch_bounds__(32 * WARP_PER_SM, 1) __global__
-    void IterFinderKernel_10(CSRBiGraph graph, int *global_buffer, 
-                            unsigned long long *maximal_bicliques, int *processing_vertex, int start_vertex,  int end_vertex,
-                            WorkList<LargeTask> *global_large_worklist, 
-                            unsigned long long *global_count, 
-                            unsigned long long *large_count, unsigned long long *tiny_count, unsigned long long *first_count, 
-                            int *isProcessed, int ngpus) {
+    void IterFinderKernel_10(CSRBiGraph graph, int *global_buffer,
+                             unsigned long long *maximal_bicliques, int *processing_vertex, int start_vertex, int end_vertex,
+                             WorkList<LargeTask> *global_large_worklist,
+                             unsigned long long *global_count,
+                             unsigned long long *large_count, unsigned long long *tiny_count, unsigned long long *first_count,
+                             int *isProcessed, int ngpus)
+{
   int warp_id = (blockIdx.x * blockDim.x + threadIdx.x) / warpSize;
   int *warp_buffer = global_buffer + (size_t)BUFFER_PER_WARP_2 * warp_id +
                      (size_t)SD_BUFFER_PER_BLOCK * (blockIdx.x + 1);
   int local_mb_counter = 0;
 
   __shared__ TinyTask local_tiny_worklist_ptr[LOCAL_TINY_WORKLIST_SIZE];
-  for (int i = threadIdx.x; i < LOCAL_TINY_WORKLIST_SIZE; i += blockDim.x) {
+  for (int i = threadIdx.x; i < LOCAL_TINY_WORKLIST_SIZE; i += blockDim.x)
+  {
     local_tiny_worklist_ptr[i].Init();
   }
   TinyTask *tiny_buffer = (TinyTask *)warp_buffer;
@@ -2270,7 +2611,8 @@ __launch_bounds__(32 * WARP_PER_SM, 1) __global__
   __shared__ WorkList<TinyTask> local_tiny_worklist;
   __shared__ int allProcessed;
   __shared__ int processed;
-  if (threadIdx.x == 0) {
+  if (threadIdx.x == 0)
+  {
     local_tiny_worklist.Init(local_tiny_worklist_ptr, LOCAL_TINY_WORKLIST_SIZE);
     pvLarge = 0;
     allProcessed = 0;
@@ -2281,30 +2623,38 @@ __launch_bounds__(32 * WARP_PER_SM, 1) __global__
 
   __threadfence_block();
   __syncthreads();
-  
-  if (threadIdx.x / warpSize < 1) {
-    while (true) {
+
+  if (threadIdx.x / warpSize < 1)
+  {
+    while (true)
+    {
       __syncwarp();
-      if (global_large_worklist->get_work_num() > 0) {
+      if (global_large_worklist->get_work_num() > 0)
+      {
         LargeTask lt;
         size_t get_num = global_large_worklist->get(lt);
-        if (get_num <= 0) continue;
+        if (get_num <= 0)
+          continue;
         int twn_p = LargeToTiny(graph, warp_buffer, lt, tiny_buffer);
-        if (get_lane_id() == 0) {
+        if (get_lane_id() == 0)
+        {
           atomicAdd(tiny_count, twn_p);
         }
         int pushed = 0;
-        while (pushed < twn_p) {
+        while (pushed < twn_p)
+        {
           __syncwarp();
-          if (local_tiny_worklist.get_work_num() < LOCAL_TINY_WORKLIST_THRESHOLD) {
-            size_t pushing = local_tiny_worklist.push_works(tiny_buffer + pushed, 
+          if (local_tiny_worklist.get_work_num() < LOCAL_TINY_WORKLIST_THRESHOLD)
+          {
+            size_t pushing = local_tiny_worklist.push_works(tiny_buffer + pushed,
                                                             twn_p - pushed);
             pushed += pushing;
           }
         }
-        llc ++;
-        if (get_lane_id() == 0 && lt.vertices[1] == -1) {
-          atomicAdd(first_count , -1);
+        llc++;
+        if (get_lane_id() == 0 && lt.vertices[1] == -1)
+        {
+          atomicAdd(first_count, -1);
           //printf("fc: %lld\n", fc);
         }
         continue;
@@ -2329,32 +2679,39 @@ __launch_bounds__(32 * WARP_PER_SM, 1) __global__
         lsc ++;
         continue;
       }*/
-      if (volpvLarge == 1 && ap == 1) {
-        if (get_lane_id() == 0) {
-          if (llc > 0) {
+      if (volpvLarge == 1 && ap == 1)
+      {
+        if (get_lane_id() == 0)
+        {
+          if (llc > 0)
+          {
             atomicAdd(large_count, -llc);
             llc = 0;
           }
         }
-	//if (get_lane_id() == 0)printf("%d %d %d %d\n", gc, lc, tc, test); 
-        if (gc == 0 && lc == 0 && tc == 0)break;
+        //if (get_lane_id() == 0)printf("%d %d %d %d\n", gc, lc, tc, test);
+        if (gc == 0 && lc == 0 && tc == 0)
+          break;
       }
     }
-  } 
+  }
   else
   {
     int first_vertex = end_vertex;
     int lgc = 0;
-    while (true) {
+    while (true)
+    {
       __syncwarp();
-      if (!local_tiny_worklist.is_empty()) {
+      if (!local_tiny_worklist.is_empty())
+      {
         TinyTask tt;
-        if (local_tiny_worklist.get(tt)) {
+        if (local_tiny_worklist.get(tt))
+        {
           //if (global_large_worklist -> get_work_num() < LARGE_WORKLIST_THRESHOLD) {
-          //  IterFinderWithMultipleVertex(graph, warp_buffer, worklist_system, 
+          //  IterFinderWithMultipleVertex(graph, warp_buffer, worklist_system,
           //                             tt, local_mb_counter, system_count);
           //} else {
-          IterFinderWithMultipleVertex(graph, warp_buffer, global_large_worklist, 
+          IterFinderWithMultipleVertex(graph, warp_buffer, global_large_worklist,
                                        tt, local_mb_counter, large_count);
           //}
           ltc++;
@@ -2362,54 +2719,69 @@ __launch_bounds__(32 * WARP_PER_SM, 1) __global__
         }
       }
       __syncwarp();
-      if (volpvLarge == 0 || ap == 0) {
-        //if (global_large_worklist -> get_work_num() > 0) continue; 
-        if (get_lane_id() == 0) {
+      if (volpvLarge == 0 || ap == 0)
+      {
+        //if (global_large_worklist -> get_work_num() > 0) continue;
+        if (get_lane_id() == 0)
+        {
           first_vertex = -1;
           int tfc;
           bool localIsEmpty;
-          do {
+          do
+          {
             localIsEmpty = local_tiny_worklist.is_empty();
-            tfc = fc; 
-          } while (tfc < MAX_BLOCKS * 4 && localIsEmpty  && atomicCAS(first_count, tfc, tfc + 1) != tfc); 
-          if (tfc < MAX_BLOCKS * 4 && localIsEmpty) {
+            tfc = fc;
+          } while (tfc < MAX_BLOCKS * 4 && localIsEmpty && atomicCAS(first_count, tfc, tfc + 1) != tfc);
+          if (tfc < MAX_BLOCKS * 4 && localIsEmpty)
+          {
             first_vertex = end_vertex - atomicAdd(processing_vertex, ngpus);
-            if (first_vertex >= start_vertex) {
+            if (first_vertex >= start_vertex)
+            {
               atomicAdd(global_count, 1);
-            } else {
+            }
+            else
+            {
               atomicExch(&pvLarge, 1);
               atomicExch(&allProcessed, 1);
             }
-            if (first_vertex < start_vertex || first_vertex > end_vertex) {
+            if (first_vertex < start_vertex || first_vertex > end_vertex)
+            {
               atomicAdd(first_count, -1);
               //printf("fc: %d\n", fc);
             }
           }
         }
         first_vertex = get_value_from_lane_x(first_vertex);
-        if (first_vertex >= start_vertex && first_vertex <= end_vertex) {
+        if (first_vertex >= start_vertex && first_vertex <= end_vertex)
+        {
           //if(get_lane_id() == 0)printf("fv: %d\n", first_vertex);
           LongTask lt(first_vertex, -1);
           //if (global_large_worklist -> get_work_num() < LARGE_WORKLIST_THRESHOLD) {
-          //  IterFinderWithMultipleVertex(graph, warp_buffer, worklist_system, 
+          //  IterFinderWithMultipleVertex(graph, warp_buffer, worklist_system,
           //                             lt, local_mb_counter, system_count);
           //} else {
-          bool isLarge = IterFinderWithMultipleVertex(graph, warp_buffer, global_large_worklist, 
-                                       lt, local_mb_counter, large_count);
+          bool isLarge = IterFinderWithMultipleVertex(graph, warp_buffer, global_large_worklist,
+                                                      lt, local_mb_counter, large_count);
           //}
-          if (get_lane_id() == 0 && !isLarge) {
-            atomicAdd(first_count, -1); 
+          if (get_lane_id() == 0 && !isLarge)
+          {
+            atomicAdd(first_count, -1);
             //printf("fc: %d\n", fc);
           }
-          lgc ++;
+          lgc++;
         }
-      } else {
-        if(get_lane_id() == 0) {
-          if (ltc > 0) {
+      }
+      else
+      {
+        if (get_lane_id() == 0)
+        {
+          if (ltc > 0)
+          {
             atomicAdd(tiny_count, -ltc);
             ltc = 0;
           }
-          if (lgc > 0) {
+          if (lgc > 0)
+          {
             atomicAdd(global_count, -lgc);
             lgc = 0;
           }
@@ -2422,21 +2794,23 @@ __launch_bounds__(32 * WARP_PER_SM, 1) __global__
     }
   }
   __syncthreads();
-  if (get_lane_id() == 0 && local_mb_counter != 0)  
+  if (get_lane_id() == 0 && local_mb_counter != 0)
   {
     atomicAdd(maximal_bicliques, local_mb_counter);
   }
 }
-IterFinderGpu10::IterFinderGpu10(CSRBiGraph *graph_in, int ngpus_) : IterFinderGpu(graph_in) {
+IterFinderGpu10::IterFinderGpu10(CSRBiGraph *graph_in, int ngpus_) : IterFinderGpu(graph_in)
+{
   graph_gpu_ = graph_in;
   vsize = graph_in->V_size;
   int noGpus = 0;
   gpuErrchk(cudaGetDeviceCount(&noGpus));
   ngpus = std::min(noGpus, ngpus_);
-  verticesEachGpu = (vsize + ngpus) / ngpus; 
+  verticesEachGpu = (vsize + ngpus) / ngpus;
 }
 
-IterFinderGpu10::~IterFinderGpu10() {
+IterFinderGpu10::~IterFinderGpu10()
+{
   graph_gpu_->Reset();
   delete graph_gpu_;
   gpuErrchk(cudaFree(dev_global_buffer_));
@@ -2444,13 +2818,14 @@ IterFinderGpu10::~IterFinderGpu10() {
   gpuErrchk(cudaFree(dev_processing_vertex_));
 }
 
-void IterFinderGpu10::Execute() {
+void IterFinderGpu10::Execute()
+{
   const int LargeSize = LARGE_WORKLIST_SIZE / ngpus;
   //printf("large worklist size: %d local tiny size: %d\n", LARGE_WORKLIST_SIZE, LOCAL_TINY_WORKLIST_SIZE);
   cudaStream_t streams[ngpus];
-  std::vector<cudaEvent_t>start_events(ngpus);
-  std::vector<cudaEvent_t>preProcess_events(ngpus);
-  std::vector<cudaEvent_t>end_events(ngpus);
+  std::vector<cudaEvent_t> start_events(ngpus);
+  std::vector<cudaEvent_t> preProcess_events(ngpus);
+  std::vector<cudaEvent_t> end_events(ngpus);
   WorkList<LargeTask> *global_large_worklist[ngpus];
   WorkList<LargeTask> large_worklist[ngpus];
   unsigned long long *global_count[ngpus];
@@ -2465,28 +2840,32 @@ void IterFinderGpu10::Execute() {
   cudaMallocHost(&host_processing_vertex, ngpus * sizeof(int));
   LargeTask *large_worklist_ptr[ngpus];
   LargeTask *lts[ngpus];
-  for (int gid = 0; gid < ngpus; gid++) {
+  for (int gid = 0; gid < ngpus; gid++)
+  {
     gpuErrchk(cudaMallocHost(&lts[gid], LARGE_WORKLIST_SIZE * sizeof(LargeTask)));
-    for (int i = 0; i < LARGE_WORKLIST_SIZE; i++) {
+    for (int i = 0; i < LARGE_WORKLIST_SIZE; i++)
+    {
       lts[gid][i] = LargeTask();
     }
   }
-  
+
   size_t g_size = (size_t)MAX_BLOCKS * BUFFER_PER_BLOCK_2;
-  
+
   int *isProcessed;
   cudaMallocManaged(&isProcessed, sizeof(int) * vsize);
-  for (int i = 0; i < vsize; i++) {
+  for (int i = 0; i < vsize; i++)
+  {
     isProcessed[i] = 0;
-  } 
- 
-//init shared_worklist 
+  }
+
+  //init shared_worklist
   int *cost;
   cudaMallocManaged(&cost, sizeof(int) * vsize);
 
-  CSRBiGraph *graph_gpu[ngpus]; 
- 
-  for (int i = 0; i < ngpus; i++) {
+  CSRBiGraph *graph_gpu[ngpus];
+
+  for (int i = 0; i < ngpus; i++)
+  {
     cudaSetDevice(i);
     graph_gpu[i] = new CSRBiGraph();
     graph_gpu[i]->CopyToGpu(*graph_gpu_);
@@ -2503,19 +2882,20 @@ void IterFinderGpu10::Execute() {
     gpuErrchk(cudaMalloc((void **)&global_large_worklist[i], sizeof(WorkList<LargeTask>)));
     gpuErrchk(cudaMalloc((void **)&local_global_buffer[i], g_size * sizeof(int)));
     large_worklist[i].Init(large_worklist_ptr[i], LargeSize, false);
-    
+
     gpuErrchk(cudaStreamCreate(&streams[i]));
     gpuErrchk(cudaEventCreate(&start_events[i]));
     gpuErrchk(cudaEventCreate(&preProcess_events[i]));
     gpuErrchk(cudaEventCreate(&end_events[i]));
   }
-  
+
   start_time_ = get_cur_time();
 
-  for (int gid = 0; gid < ngpus; gid++) {
+  for (int gid = 0; gid < ngpus; gid++)
+  {
     gpuErrchk(cudaSetDevice(gid));
     gpuErrchk(cudaEventRecord(start_events[gid], streams[gid]))
-    gpuErrchk(cudaMemcpyAsync(large_worklist_ptr[gid], lts[gid], LargeSize * sizeof(LargeTask), cudaMemcpyHostToDevice, streams[gid]));
+        gpuErrchk(cudaMemcpyAsync(large_worklist_ptr[gid], lts[gid], LargeSize * sizeof(LargeTask), cudaMemcpyHostToDevice, streams[gid]));
     gpuErrchk(cudaMemcpyAsync(global_large_worklist[gid], &large_worklist[gid], sizeof(WorkList<LargeTask>), cudaMemcpyHostToDevice, streams[gid]));
     gpuErrchk(cudaMemsetAsync(global_count[gid], 0, sizeof(unsigned long long), streams[gid]));
     gpuErrchk(cudaMemsetAsync(large_count[gid], 0, sizeof(unsigned long long), streams[gid]));
@@ -2526,26 +2906,26 @@ void IterFinderGpu10::Execute() {
     gpuErrchk(cudaMemsetAsync(local_global_buffer[gid], 0, g_size * sizeof(int), streams[gid]));
     int start_vertex = 0;
     IterFinderKernel_10<<<MAX_BLOCKS, WARP_PER_BLOCK * 32, 0, streams[gid]>>>(
-      *graph_gpu[gid], local_global_buffer[gid], local_mb[gid], local_processing_vertex[gid], start_vertex, 
-      end_vertex[gid], global_large_worklist[gid],   
-      global_count[gid], large_count[gid], tiny_count[gid], first_count[gid], isProcessed, ngpus);
+        *graph_gpu[gid], local_global_buffer[gid], local_mb[gid], local_processing_vertex[gid], start_vertex,
+        end_vertex[gid], global_large_worklist[gid],
+        global_count[gid], large_count[gid], tiny_count[gid], first_count[gid], isProcessed, ngpus);
     gpuErrchk(cudaMemcpyAsync(&all_mb[gid], local_mb[gid], sizeof(int), cudaMemcpyDeviceToHost, streams[gid]))
-    gpuErrchk(cudaEventRecord(end_events[gid], streams[gid]))
-
+        gpuErrchk(cudaEventRecord(end_events[gid], streams[gid]))
   }
 
-  for (int gid = 0; gid < ngpus; gid++) {
+  for (int gid = 0; gid < ngpus; gid++)
+  {
     gpuErrchk(cudaStreamSynchronize(streams[gid]));
     float time;
     cudaEventElapsedTime(&time, start_events[gid], end_events[gid]);
-    std::cout<<"Processing time of gpu "<<gid<<": "<<time/1000<<"s"<<std::endl;
+    std::cout << "Processing time of gpu " << gid << ": " << time / 1000 << "s" << std::endl;
     gpuErrchk(cudaStreamDestroy(streams[gid]));
   }
   maximal_nodes_ = 0;
-  for (int i = 0; i < ngpus; i++) {
-    std::cout<<"gpu "<<i<<": "<<all_mb[i]<<std::endl;
+  for (int i = 0; i < ngpus; i++)
+  {
+    std::cout << "gpu " << i << ": " << all_mb[i] << std::endl;
     maximal_nodes_ += all_mb[i];
   }
   exe_time_ = get_cur_time() - start_time_;
 }
-

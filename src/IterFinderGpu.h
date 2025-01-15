@@ -18,75 +18,98 @@
 #define UNION_THRESHOLD 10000
 
 #ifdef NN
-class bitset_t {
+class bitset_t
+{
   typedef uint8_t unit_type;
-  #define unit_size 8 
-  #define bitset_size (NN + unit_size - 1) / unit_size
+#define unit_size 8
+#define bitset_size (NN + unit_size - 1) / unit_size
 private:
   unit_type _bits[bitset_size];
+
 public:
-  __device__ bitset_t() {
+  __device__ bitset_t()
+  {
     memset(_bits, 0, bitset_size * sizeof(unit_type));
   }
 
-  __device__ bitset_t(const bitset_t & b) {
+  __device__ bitset_t(const bitset_t &b)
+  {
     memcpy(_bits, b._bits, bitset_size * sizeof(unit_type));
   }
 
-  __device__ bitset_t& operator = (const bitset_t & b) {
+  __device__ bitset_t &operator=(const bitset_t &b)
+  {
     memcpy(_bits, b._bits, bitset_size * sizeof(unit_type));
   }
 
-  __device__ bitset_t operator & (const bitset_t &b) {
+  __device__ bitset_t operator&(const bitset_t &b)
+  {
     bitset_t temp = *this;
-    for (int i = 0; i < bitset_size; i++) {
+    for (int i = 0; i < bitset_size; i++)
+    {
       temp._bits[i] &= b._bits[i];
     }
     return temp;
   }
 
-  __device__ bool operator != (const bitset_t &b) {
-    return !operator ==(b);
-  } 
+  __device__ bool operator!=(const bitset_t &b)
+  {
+    return !operator==(b);
+  }
 
-  __device__ void operator &= (const bitset_t &b) {
-    for (int i = 0; i < bitset_size; i++) {
+  __device__ void operator&=(const bitset_t &b)
+  {
+    for (int i = 0; i < bitset_size; i++)
+    {
       _bits[i] &= b._bits[i];
     }
   }
 
-  __device__ bool operator == (const bitset_t & b) const {
-    for (int i = 0; i < bitset_size; i++) {
-      if (_bits[i] != b._bits[i]) {
+  __device__ bool operator==(const bitset_t &b) const
+  {
+    for (int i = 0; i < bitset_size; i++)
+    {
+      if (_bits[i] != b._bits[i])
+      {
         return false;
       }
     }
     return true;
   }
 
-  __device__ void clear() {
+  __device__ void clear()
+  {
     memset(_bits, 0, bitset_size * sizeof(unit_type));
   }
 
-  __device__ int count() {
+  __device__ int count()
+  {
     int ans = 0;
-    for (int i = 0; i < bitset_size; i++) {
+    for (int i = 0; i < bitset_size; i++)
+    {
       char t = _bits[i];
-      while (t != 0) {
-        ans ++;
+      while (t != 0)
+      {
+        ans++;
         t &= (t - 1);
       }
     }
     return ans;
   }
 
-  __device__ void print() {
-    for (int i = bitset_size - 1; i >= 0; i--) {
+  __device__ void print()
+  {
+    for (int i = bitset_size - 1; i >= 0; i--)
+    {
       char t = _bits[i];
-      for (int j = 0; j < unit_size; j++) {
-        if (t & 1) {
+      for (int j = 0; j < unit_size; j++)
+      {
+        if (t & 1)
+        {
           printf("1");
-        } else {
+        }
+        else
+        {
           printf("0");
         }
         t = t >> 1;
@@ -95,9 +118,11 @@ public:
     printf("\n");
   }
 
-  __device__ void setbits(int n) {
+  __device__ void setbits(int n)
+  {
     int i = 0;
-    while (n > 0) {
+    while (n > 0)
+    {
       int offset = n > unit_size ? unit_size : n;
       _bits[i] = -1;
       _bits[i] = _bits[i] >> (unit_size - offset);
@@ -106,53 +131,58 @@ public:
     }
   }
 
-  __device__ void set(int pos) {
+  __device__ void set(int pos)
+  {
     int i = 0;
-    while(true) {
-      if (pos < unit_size) {
+    while (true)
+    {
+      if (pos < unit_size)
+      {
         _bits[i] |= 1 << pos;
         break;
       }
       i++;
       pos -= unit_size;
-    } 
-  } 
-
+    }
+  }
 };
 #endif
 
-class IterFinderGpu : public BicliqueFinder {
- public:
+class IterFinderGpu : public BicliqueFinder
+{
+public:
   IterFinderGpu() = delete;
   IterFinderGpu(CSRBiGraph *graph_in);
   ~IterFinderGpu();
   virtual void Execute();
   void SyncMB();
 
- protected:
+protected:
   CSRBiGraph *graph_gpu_;
-  int  *dev_global_buffer_, *dev_processing_vertex_;
+  int *dev_global_buffer_, *dev_processing_vertex_;
   unsigned long long *dev_mb_;
   double clock_rate;
-  unsigned long long* total_clock_initialize, *total_clock_queue, *total_clock_generate_tiny, *total_clock_iterate, *dev_total_clock;
+  unsigned long long *total_clock_initialize, *total_clock_queue, *total_clock_generate_tiny, *total_clock_iterate, *dev_total_clock;
 };
 
-class IterFinderGpu2 : public IterFinderGpu {
- public:
+class IterFinderGpu2 : public IterFinderGpu
+{
+public:
   IterFinderGpu2() = delete;
   IterFinderGpu2(CSRBiGraph *graph_in);
   ~IterFinderGpu2();
   void Execute();
 };
 
-
-class IterFinderGpu4 : public IterFinderGpu {
- public:
+class IterFinderGpu4 : public IterFinderGpu
+{
+public:
   IterFinderGpu4() = delete;
   IterFinderGpu4(CSRBiGraph *graph_in);
   ~IterFinderGpu4();
   void Execute();
-  private:
+
+private:
   ShortTask *global_worklist;
   int *worklist_num;
   ShortTask *local_worklist;
@@ -160,13 +190,15 @@ class IterFinderGpu4 : public IterFinderGpu {
   int *write_done;
 };
 
-class IterFinderGpu5 : public IterFinderGpu {
- public:
+class IterFinderGpu5 : public IterFinderGpu
+{
+public:
   IterFinderGpu5() = delete;
   IterFinderGpu5(CSRBiGraph *graph_in);
   ~IterFinderGpu5();
   void Execute();
-  private:
+
+private:
   ShortTask *global_worklist;
   int *worklist_num;
   unsigned *worklist_lock;
@@ -174,14 +206,15 @@ class IterFinderGpu5 : public IterFinderGpu {
   int *local_upper_bound;
 };
 
-
-class IterFinderGpu6 : public IterFinderGpu {
- public:
+class IterFinderGpu6 : public IterFinderGpu
+{
+public:
   IterFinderGpu6() = delete;
   IterFinderGpu6(CSRBiGraph *graph_in, int bound_height = 20, int bound_size = 1500);
   ~IterFinderGpu6();
   virtual void Execute();
-  protected:
+
+protected:
   WorkList<LargeTask> *global_large_worklist;
   unsigned long long *global_count;
   unsigned long long *large_count;
@@ -192,60 +225,73 @@ class IterFinderGpu6 : public IterFinderGpu {
   unsigned long long *mb_system;
 };
 
-class IterFinderGpu7: public IterFinderGpu {
+class IterFinderGpu7 : public IterFinderGpu
+{
 public:
   IterFinderGpu7() = delete;
   IterFinderGpu7(CSRBiGraph *graph_in, int ngpus);
   ~IterFinderGpu7();
   void Execute();
+
 private:
   int ngpus, verticesEachGpu, vsize;
 };
 
-class IterFinderGpu8: public IterFinderGpu {
+class IterFinderGpu8 : public IterFinderGpu
+{
 public:
   IterFinderGpu8() = delete;
   IterFinderGpu8(CSRBiGraph *graph_in, int ngpus, int task_channel);
   ~IterFinderGpu8();
   void Execute();
+
 private:
   int ngpus, vsize, task_channel_;
 };
-class IterFinderGpu9: public IterFinderGpu {
+class IterFinderGpu9 : public IterFinderGpu
+{
 public:
   IterFinderGpu9() = delete;
   IterFinderGpu9(CSRBiGraph *graph_in, int ngpus);
   ~IterFinderGpu9();
   void Execute();
+
 private:
   int ngpus, verticesEachGpu, vsize;
 };
 
-class IterFinderGpu10: public IterFinderGpu {
+class IterFinderGpu10 : public IterFinderGpu
+{
 public:
   IterFinderGpu10() = delete;
   IterFinderGpu10(CSRBiGraph *graph_in, int ngpus);
   ~IterFinderGpu10();
   void Execute();
+
 private:
   int ngpus, verticesEachGpu, vsize;
 };
 __device__ __forceinline__ int NeighborsIntersectL(CSRBiGraph &graph,
                                                    int *L_vertices, int L_size,
-                                                   int *buf, int *dst) {
+                                                   int *buf, int *dst)
+{
   int *base_0, size_0, *base_1, size_1, u0, u1;
   u0 = L_vertices[0];
   base_0 = graph.rev_column_indices + graph.rev_row_offset[u0];
   size_0 = graph.rev_row_offset[u0 + 1] - graph.rev_row_offset[u0];
 
-  for (int i = L_size - 2; i >= 0; i--) {
+  for (int i = L_size - 2; i >= 0; i--)
+  {
     u1 = L_vertices[L_size - 1 - i];
     base_1 = graph.rev_column_indices + graph.rev_row_offset[u1];
     size_1 = graph.rev_row_offset[u1 + 1] - graph.rev_row_offset[u1];
-    if (i & 1) {
+    if (i & 1)
+    {
       size_0 = seq_intersect_warp(base_0, size_0, base_1, size_1, buf);
       base_0 = buf;
-    } else {
+    }
+    else
+    {
       size_0 = seq_intersect_warp(base_0, size_0, base_1, size_1, dst);
       base_0 = dst;
     }
@@ -255,20 +301,25 @@ __device__ __forceinline__ int NeighborsIntersectL(CSRBiGraph &graph,
 
 __device__ __forceinline__ int NeighborsIntersectR(CSRBiGraph &graph,
                                                    int *R_vertices, int R_size,
-                                                   int *buf, int *dst) {
+                                                   int *buf, int *dst)
+{
   int *base_0, size_0, *base_1, size_1, v0, v1;
   v0 = R_vertices[0];
   base_0 = graph.column_indices + graph.row_offset[v0];
   size_0 = graph.row_offset[v0 + 1] - graph.row_offset[v0];
 
-  for (int i = R_size - 2; i >= 0; i--) {
+  for (int i = R_size - 2; i >= 0; i--)
+  {
     v1 = R_vertices[R_size - 1 - i];
     base_1 = graph.column_indices + graph.row_offset[v1];
     size_1 = graph.row_offset[v1 + 1] - graph.row_offset[v1];
-    if (i & 1) {
+    if (i & 1)
+    {
       size_0 = seq_intersect_warp(base_0, size_0, base_1, size_1, buf);
       base_0 = buf;
-    } else {
+    }
+    else
+    {
       size_0 = seq_intersect_warp(base_0, size_0, base_1, size_1, dst);
       base_0 = dst;
     }
@@ -278,35 +329,43 @@ __device__ __forceinline__ int NeighborsIntersectR(CSRBiGraph &graph,
 
 __device__ __forceinline__ int NeighborsUnionL(CSRBiGraph &graph,
                                                int *L_vertices, int L_size,
-                                               int *buf, int *dst) {
+                                               int *buf, int *dst)
+{
   int *base_0, size_0, *base_1, size_1, u0, u1;
   u0 = L_vertices[0];
   base_0 = graph.rev_column_indices + graph.rev_row_offset[u0];
   size_0 = graph.rev_row_offset[u0 + 1] - graph.rev_row_offset[u0];
 
-  if(L_size > UNION_THRESHOLD) {
+  if (L_size > UNION_THRESHOLD)
+  {
     int cnt = 0, common_neighbors = 0;
-    for (int i = 0; i < graph.V_size; i++) {
+    for (int i = 0; i < graph.V_size; i++)
+    {
       size_1 = graph.row_offset[i + 1] - graph.row_offset[i];
       base_1 = graph.column_indices + graph.row_offset[i];
-      common_neighbors = seq_intersect_warp_cnt (L_vertices, L_size, base_1, size_1);
-      if(common_neighbors != 0) {
-        if(get_lane_id() == 0)dst[cnt] = i;
+      common_neighbors = seq_intersect_warp_cnt(L_vertices, L_size, base_1, size_1);
+      if (common_neighbors != 0)
+      {
+        if (get_lane_id() == 0)
+          dst[cnt] = i;
         cnt++;
       }
     }
     return cnt;
   }
 
-
-  for (int i = L_size - 2; i >= 0; i--) {
+  for (int i = L_size - 2; i >= 0; i--)
+  {
     u1 = L_vertices[L_size - 1 - i];
     base_1 = graph.rev_column_indices + graph.rev_row_offset[u1];
     size_1 = graph.rev_row_offset[u1 + 1] - graph.rev_row_offset[u1];
-    if (i & 1) {
+    if (i & 1)
+    {
       size_0 = seq_union_warp_adv(base_0, size_0, base_1, size_1, buf);
       base_0 = buf;
-    } else {
+    }
+    else
+    {
       size_0 = seq_union_warp_adv(base_0, size_0, base_1, size_1, dst);
       base_0 = dst;
     }
@@ -317,17 +376,25 @@ __device__ __forceinline__ int NeighborsUnionL(CSRBiGraph &graph,
 template <typename T = int>
 __device__ __forceinline__ void seq_intersect_warp_for_iter_finder(
     T *src_0, T *level_neighbors_0, T size_0, T *src_1, T size_1,
-    T incoming_val = 1, T level_bound = 0) {
-  if (size_0 == 0 || size_1 == 0) return;
+    T incoming_val = 1, T level_bound = 0)
+{
+  if (size_0 == 0 || size_1 == 0)
+    return;
 
-  for (T i = get_lane_id(); i < size_1; i += warpSize) {
+  for (T i = get_lane_id(); i < size_1; i += warpSize)
+  {
     T pos = binary_search(src_1[i], src_0, 0, size_0 - 1);
-    if (pos != -1) {
-      if (incoming_val == 0) {
+    if (pos != -1)
+    {
+      if (incoming_val == 0)
+      {
         int val_out = level_neighbors_0[pos] + 1;
-        if ((val_out >> 16) >= level_bound) val_out |= 0x7fff0000;
+        if ((val_out >> 16) >= level_bound)
+          val_out |= 0x7fff0000;
         level_neighbors_0[pos] = val_out;
-      } else {
+      }
+      else
+      {
         level_neighbors_0[pos] += incoming_val;
       }
     }
@@ -337,7 +404,8 @@ __device__ __forceinline__ void seq_intersect_warp_for_iter_finder(
 __device__ __forceinline__ bool finder_push(
     CSRBiGraph &graph, int push_cid, int level, int *L_vertices, int *L_level,
     const int L_size, int *C_vertices, int *C_level_neighbors, const int C_size,
-    int &size_cur_l, bool init = false) {
+    int &size_cur_l, bool init = false)
+{
   bool is_maximal = true;
   int cur_c = C_vertices[push_cid];
   int *base_cur_c = graph.column_indices + graph.row_offset[cur_c];
@@ -345,10 +413,13 @@ __device__ __forceinline__ bool finder_push(
 
   // compute L
   int size_last_vs_cur = 0;
-  for (int i = get_lane_id(); i < L_size; i += warpSize) {
-    if (L_level[i] == level - 1) {
+  for (int i = get_lane_id(); i < L_size; i += warpSize)
+  {
+    if (L_level[i] == level - 1)
+    {
       size_last_vs_cur += 0x10000;
-      if (binary_search(L_vertices[i], base_cur_c, 0, size_cur_c - 1) >= 0) {
+      if (binary_search(L_vertices[i], base_cur_c, 0, size_cur_c - 1) >= 0)
+      {
         L_level[i] = level;
         size_last_vs_cur++;
       }
@@ -358,38 +429,45 @@ __device__ __forceinline__ bool finder_push(
   size_last_vs_cur = get_value_from_lane_x(size_last_vs_cur);
   size_cur_l = size_last_vs_cur & 0xffff;
 
-
   bool recompute = init || (size_last_vs_cur >> 16) > (size_cur_l << 1);
   int victim_level = recompute ? level : level - 1;
 
-  if (recompute) {
-    for (int i = get_lane_id(); i < C_size; i += warpSize) {
+  if (recompute)
+  {
+    for (int i = get_lane_id(); i < C_size; i += warpSize)
+    {
       C_level_neighbors[i] &= 0xffff0000;
     }
   }
 
   // compute C
-  for (int i = 0; i < L_size; i++) {
-    if (L_level[i] == victim_level) {
+  for (int i = 0; i < L_size; i++)
+  {
+    if (L_level[i] == victim_level)
+    {
       int u0 = L_vertices[i];
       int *base_0 = graph.rev_column_indices + graph.rev_row_offset[u0];
       int size_0 = graph.rev_row_offset[u0 + 1] - graph.rev_row_offset[u0];
-      for (int j = get_lane_id(); j < size_0; j += warpSize) {
+      for (int j = get_lane_id(); j < size_0; j += warpSize)
+      {
         int pos = binary_search(base_0[j], C_vertices, 0, C_size - 1);
-        if (pos != -1) C_level_neighbors[pos] += recompute ? 1 : -1;
+        if (pos != -1)
+          C_level_neighbors[pos] += recompute ? 1 : -1;
       }
     }
   }
 
   // maximality check
-  for (int i = get_lane_id(); i < C_size && is_maximal; i += warpSize) {
+  for (int i = get_lane_id(); i < C_size && is_maximal; i += warpSize)
+  {
     int c_level_neighbors = C_level_neighbors[i];
-    if ((c_level_neighbors & 0xffff) == size_cur_l) {
+    if ((c_level_neighbors & 0xffff) == size_cur_l)
+    {
       if (i < push_cid && (c_level_neighbors >> 16) >= level)
         is_maximal = false;
       else if ((c_level_neighbors >> 16) > level)
         C_level_neighbors[i] = (level << 16) | (c_level_neighbors & 0xffff);
-    } 
+    }
   }
 
   return __all_sync(FULL_MASK, is_maximal);
@@ -400,37 +478,46 @@ __device__ __forceinline__ void finder_pop(CSRBiGraph &graph, int pop_cid,
                                            int *L_level, const int L_size,
                                            int *C_vertices,
                                            int *C_level_neighbors,
-                                           const int C_size) {
+                                           const int C_size)
+{
   // recover L and C
-  for (int i = 0; i < L_size; i++) {
-    if (L_level[i] == level - 1) {
+  for (int i = 0; i < L_size; i++)
+  {
+    if (L_level[i] == level - 1)
+    {
       int u0 = L_vertices[i];
       int *base_0 = graph.rev_column_indices + graph.rev_row_offset[u0];
       int size_0 = graph.rev_row_offset[u0 + 1] - graph.rev_row_offset[u0];
-      for (int i = get_lane_id(); i < size_0; i += warpSize) {
+      for (int i = get_lane_id(); i < size_0; i += warpSize)
+      {
         int pos = binary_search(base_0[i], C_vertices, 0, C_size);
-        if (pos != -1) {
+        if (pos != -1)
+        {
           int level_neighbors = C_level_neighbors[pos] + 1;
           if ((level_neighbors >> 16) >= level)
             level_neighbors = 0x3fff0000 | (level_neighbors & 0xffff);
           C_level_neighbors[pos] = level_neighbors;
         }
       }
-    } else if (L_level[i] >= level && get_lane_id() == 0)
+    }
+    else if (L_level[i] >= level && get_lane_id() == 0)
       L_level[i] = level - 1;
   }
 
 #ifdef PRUNE_EN
-  for (int i = get_lane_id(); i < C_size; i += warpSize) {
+  for (int i = get_lane_id(); i < C_size; i += warpSize)
+  {
     int level_neighbors = C_level_neighbors[i];
     int c_level = level_neighbors >> 16;
-    if (c_level >= level) {
+    if (c_level >= level)
+    {
       int prefix = (c_level == 0x3fff || i == pop_cid) ? 0x7fff : level - 1;
       C_level_neighbors[i] = (level_neighbors & 0xffff) | (prefix << 16);
     }
   }
 #else
-  if (get_lane_id() == 0) C_level_neighbors[pop_cid] |= 0x7fff0000;
+  if (get_lane_id() == 0)
+    C_level_neighbors[pop_cid] |= 0x7fff0000;
 #endif
 }
 
