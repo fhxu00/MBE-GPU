@@ -61,14 +61,15 @@ then
     unzip -q MBET.zip -d MBET
   fi
   cd MBET || exit
+  cd MBET || exit
   mkdir build
   cd build 
   cmake ..
   make MBET
   make MBETM
-  mv MBET ../../../bin/
-  mv MBETM ../../../bin/
-  cd ../../../
+  mv MBET ../../../../bin/
+  mv MBETM ../../../../bin/
+  cd ../../../../
 fi
 
 if [ ! -f "./bin/cuMBE" ]

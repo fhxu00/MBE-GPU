@@ -251,10 +251,10 @@ void CSRBiGraph::Read(const char *filename, Option opt)
       delete[] buck;
     }
 
-    printf("Graph:%s ", filename);
-    printf("|U|:%8d |V|:%8d |E|:%8d ", U_size, V_size, edge_size);
-    printf("d(U):%8d d2(U):%8d ", U_degree, U_2degree);
-    printf("d(V):%8d d2(V):%8d\n", V_degree, V_2degree);
+    // printf("Graph:%s ", filename);
+    // printf("|U|:%8d |V|:%8d |E|:%8d ", U_size, V_size, edge_size);
+    // printf("d(U):%8d d2(U):%8d ", U_degree, U_2degree);
+    // printf("d(V):%8d d2(V):%8d\n", V_degree, V_2degree);
   }
   else
   {
@@ -299,9 +299,9 @@ void CSRBiGraph::Read(const char *filename, Option opt)
         u_adj_lists[uid].emplace_back(vid);
       }
     }
-    printf("Graph:%s ", filename);
-    printf("|U|:%8d |V|:%8d |E|:%8d ", U_size, V_size, edge_size);
-    printf("d(U):%8d d(V):%8d\n ", U_degree, V_degree);
+    // printf("Graph:%s ", filename);
+    // printf("|U|:%8d |V|:%8d |E|:%8d ", U_size, V_size, edge_size);
+    // printf("d(U):%8d d(V):%8d\n ", U_degree, V_degree);
   }
 
   row_offset = new int[V_size + 1];

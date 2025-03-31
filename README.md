@@ -122,7 +122,11 @@ bash ./scripts/gen-table-2.sh
 ```
 Then you will find the experimental result under the directory `table/`.
 # QA
-1. How to solve the error `GPUassert: named symbol not found /usr/local/MBE-GPU/src/IterFinderGpu.cu 215`?<br/>
+#### 1. How to solve the error `GPUassert: named symbol not found /usr/local/MBE-GPU/src/IterFinderGpu.cu 215`?
 This usually means that the flag CUDA_NVCC_FLAGS in `src/CMakeLists.txt` mismatch with your GPUs. To solve the problem, you should revise the file CMakeLists.txt to support your GPU.
 First, you should lookup the CUDA_NVCC_FLAGS matching with your GPU from [this link](https://arnon.dk/matching-sm-architectures-arch-and-gencode-for-various-nvidia-cards/). Second, add a `if` branch
 to set CUDA_NVCC_FLAGS for your GPU in `CMakeLists.txt`.
+
+#### 2. How to solve the error `#error -- unsupported GNU version! gcc versions later than 12 are not supported`? 
+When compiling with CUDA 12.2, you may encounter an error indicating that GCC versions later than 12 are not supported. The nvcc flag `-allow-unsupported-compiler` can be used to override this check, but it may lead to compilation failure or incorrect runtime execution. 
+Upgrade CUDA to version 12.6. It has been tested and proven to work well with higher GCC versions.

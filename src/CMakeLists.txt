@@ -4,6 +4,8 @@ if(POLICY CMP0146)
 	cmake_policy(SET CMP0146 OLD)
 endif()
 
+# set(CUDA_TOOLKIT_ROOT_DIR /usr/local/cuda-12.6)
+
 set(CMAKE_CXX_FLAGS "-O3")
 set(CUDA_SEPARABLE_COMPILATION TRUE)
 project(MBE_GPU)

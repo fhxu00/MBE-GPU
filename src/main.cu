@@ -172,7 +172,7 @@ int main(int argc, char *argv[])
   //printf("trans:%d sel:%d order:%d fast_mode:%d\n", opt.uvtrans, sel, opt.order,
   //       opt.fast_mode);
 
-  printf("%d, %s, %u, %u, %d, %d", sel, graph_name, MAX_BLOCKS, WARP_PER_BLOCK, bound_height, bound_size);
+  printf("%s, %d, %s, %u, %u, %d, %d", argv[0], sel, graph_name, MAX_BLOCKS, WARP_PER_BLOCK, bound_height, bound_size);
 #ifdef NN
   printf(", %u", NN);
 #endif

@@ -6,6 +6,7 @@
 #include "BicliqueFinder.h"
 #include "GpuUtil.cuh"
 #include <cstring>
+#include <cstdint>
 
 #ifndef MAX_DEGREE_BOUND
 #define MAX_DEGREE_BOUND 0x800000
