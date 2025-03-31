@@ -4,6 +4,7 @@ then
   mkdir ./bin
 fi
 
+rm ./bin/MBE_GPU
 if [ ! -f "./bin/MBE_GPU" ]  
 then
   cd ./src || exit
@@ -13,11 +14,12 @@ then
   fi
   cd build || exit
   cmake .. 
-  make
+  make MBE_GPU
   mv MBE_GPU* ../../bin/
   cd ../../
 fi
 
+rm ./bin/GMBEv2
 if [ ! -f "./bin/GMBEv2" ]  
 then
   cd ./src || exit

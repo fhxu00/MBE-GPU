@@ -94,7 +94,7 @@ cuda_add_executable(
   GMBEv2  
   BicliqueFinder.cu BiGraph.cu main.cu Utility.cu IterFinderGpu.cu
 )
-target_compile_definitions(GMBEv2 PUBLIC -DPRUNE_EN -DNN=64)
+target_compile_definitions(GMBEv2 PUBLIC -DPRUNE_EN -DNN=32)
 target_link_libraries(GMBEv2 ${CUDA_cudadevrt_LIBRARY})
 target_link_libraries(GMBEv2 CUB::CUB)
 

@@ -322,7 +322,7 @@ __device__ __forceinline__ void IterProcess(CSRBiGraph &graph, int *L_vertices,
 __launch_bounds__(32 * WARP_PER_SM, 1) __global__
     void IterFinderKernel(CSRBiGraph graph, int *global_buffer,
                           unsigned long long *maximal_bicliques, int *processing_vertex,
-                          double clock_rate = 0)
+                          double clock_rate, unsigned long long *max_d2)
 {
   auto sm_start = clock64();
   int warp_id = (blockIdx.x * blockDim.x + threadIdx.x) / warpSize;
@@ -386,6 +386,9 @@ __launch_bounds__(32 * WARP_PER_SM, 1) __global__
         // step 3: initialize C set
         C_size = NeighborsUnionL(graph, L_vertices, L_size, C_level_neighbors,
                                  C_vertices);
+        if (get_lane_id() == 0)
+          atomicMax(max_d2, C_size);
+        continue;
         C_size = seq_diff_warp(C_vertices, C_size, R_vertices, R_size);
 
         if (C_size > MAX_2_H_DEGREE_BOUND && get_lane_id() == 0)
@@ -451,6 +454,7 @@ __launch_bounds__(32 * WARP_PER_SM, 1) __global__
   }
   if (threadIdx.x == 0)
   {
+    printf(" [%llu] ", *max_d2 - 1);
     //printf("sm end. now maximal_bicliques is %d\n", *maximal_bicliques);
   }
 }
@@ -502,9 +506,13 @@ IterFinderGpu::~IterFinderGpu()
 
 void IterFinderGpu::Execute()
 {
+  unsigned long long *max_d2;
+
   start_time_ = get_cur_time();
+  gpuErrchk(cudaMalloc((void **)&max_d2, sizeof(unsigned long long)));
+  gpuErrchk(cudaMemset(max_d2, 0, sizeof(unsigned long long)));
   IterFinderKernel<<<MAX_BLOCKS, WARP_PER_BLOCK * 32>>>(
-      *graph_gpu_, dev_global_buffer_, dev_mb_, dev_processing_vertex_, clock_rate);
+      *graph_gpu_, dev_global_buffer_, dev_mb_, dev_processing_vertex_, clock_rate, max_d2);
   gpuErrchk(cudaGetLastError());
   gpuErrchk(cudaDeviceSynchronize());
   gpuErrchk(cudaMemcpy(&maximal_nodes_, dev_mb_, sizeof(int),
